@@ -14,6 +14,7 @@ from .paper import PaperTrader
 from .report import format_report
 from .strategy import STRATEGIES, make_strategy
 from .synth import generate
+from .webreport import WebReporter
 
 
 def parse_params(raw: str | None) -> dict[str, str]:
@@ -131,6 +132,7 @@ def cmd_paper(args: argparse.Namespace) -> int:
         slippage=args.slippage,
         size=args.size,
         max_drawdown_stop=args.max_drawdown,
+        reporter=WebReporter.from_env(),
     )
     trader.run(poll_seconds=args.poll)
     return 0

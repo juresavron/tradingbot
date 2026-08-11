@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tradingbot — dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+</head>
+<body>
+
+  <!-- Shown until config.js has real values -->
+  <section id="view-setup" class="card center hidden">
+    <h1>tradingbot dashboard</h1>
+    <p>Not configured yet. Edit <code>web/config.js</code> with your Supabase
+    project URL and publishable (anon) key, then redeploy. Full steps are in
+    <code>WEB.md</code> in the repository.</p>
+  </section>
+
+  <!-- Login / sign up -->
+  <section id="view-auth" class="card center hidden">
+    <h1>tradingbot dashboard</h1>
+    <p class="muted">Live window into your paper trading bot. Fake money, real discipline.</p>
+    <form id="auth-form">
+      <input id="auth-email" type="email" placeholder="email" autocomplete="email" required>
+      <input id="auth-password" type="password" placeholder="password (min 6 chars)" autocomplete="current-password" minlength="6" required>
+      <div class="row">
+        <button type="submit" id="btn-signin">Sign in</button>
+        <button type="button" id="btn-signup" class="secondary">Create account</button>
+      </div>
+    </form>
+    <p id="auth-message" class="message"></p>
+  </section>
+
+  <!-- Main dashboard -->
+  <section id="view-app" class="hidden">
+    <header>
+      <h1>tradingbot</h1>
+      <div class="header-right">
+        <span id="user-email" class="muted"></span>
+        <button id="btn-signout" class="secondary small">Sign out</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside>
+        <div class="aside-head">
+          <h2>Runs</h2>
+          <button id="btn-new-run" class="small">+ New run</button>
+        </div>
+        <ul id="runs-list"></ul>
+        <p id="runs-empty" class="muted hidden">No runs yet. Click “+ New run”,
+        then start the bot with the environment variables it gives you.</p>
+      </aside>
+
+      <main id="run-detail" class="hidden">
+        <div class="run-head">
+          <div>
+            <h2 id="run-title"></h2>
+            <p id="run-sub" class="muted"></p>
+          </div>
+          <div class="run-head-right">
+            <span id="run-badge" class="badge"></span>
+            <button id="btn-delete-run" class="danger small">Delete</button>
+          </div>
+        </div>
+
+        <div class="stats" id="stats"></div>
+
+        <div class="card">
+          <h3>Equity <span class="muted" id="chart-span"></span></h3>
+          <div id="chart"></div>
+        </div>
+
+        <div class="card">
+          <h3>Trades <span class="muted" id="trades-count"></span></h3>
+          <div class="table-wrap">
+            <table id="trades-table">
+              <thead>
+                <tr><th>time (local)</th><th>side</th><th>price</th><th>qty</th><th>pnl</th><th>reason</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="trades-empty" class="muted hidden">No trades yet — the bot trades
+          when its strategy flips, which can take hours or days. Boring is normal.</p>
+        </div>
+      </main>
+
+      <main id="run-none" class="center-main">
+        <p class="muted">Select a run on the left, or create one.</p>
+      </main>
+    </div>
+  </section>
+
+  <!-- New run dialog -->
+  <dialog id="dlg-new-run">
+    <form id="new-run-form" method="dialog">
+      <h3>New run</h3>
+      <label>Name <input id="nr-name" placeholder="my 4h sma bot" required></label>
+      <label>Symbol <input id="nr-symbol" value="BTC/USDT"></label>
+      <label>Timeframe <input id="nr-timeframe" value="4h"></label>
+      <label>Strategy <input id="nr-strategy" value="sma_cross(fast=10, slow=30)"></label>
+      <label>Starting cash <input id="nr-cash" type="number" value="100" min="1"></label>
+      <div class="row">
+        <button type="submit">Create</button>
+        <button type="button" class="secondary" onclick="document.getElementById('dlg-new-run').close()">Cancel</button>
+      </div>
+      <p id="nr-message" class="message"></p>
+    </form>
+  </dialog>
+
+  <!-- One-time key dialog -->
+  <dialog id="dlg-key">
+    <h3>Run created — copy this now</h3>
+    <p>The secret key below is shown <strong>only once</strong> (the server
+    stores just its hash). Paste this block into the terminal on the machine
+    that runs the bot, then start the bot normally:</p>
+    <pre id="key-block"></pre>
+    <div class="row">
+      <button id="btn-copy-key">Copy</button>
+      <button class="secondary" onclick="document.getElementById('dlg-key').close()">Done — I saved it</button>
+    </div>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

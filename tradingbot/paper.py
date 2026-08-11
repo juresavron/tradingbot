@@ -40,6 +40,7 @@ class PaperTrader:
         size: float = 1.0,
         max_drawdown_stop: float = 0.25,
         lookback: int = 300,
+        reporter=None,
     ):
         self.client = client
         self.symbol = symbol
@@ -51,6 +52,7 @@ class PaperTrader:
         self.size = size
         self.max_drawdown_stop = max_drawdown_stop
         self.lookback = lookback
+        self.reporter = reporter
         self.state = self._load_state(starting_cash)
 
     # ---------------------------------------------------------------- state
@@ -92,6 +94,10 @@ class PaperTrader:
 
     def equity(self, price: float) -> float:
         return self.state["cash"] + self.state["qty"] * price
+
+    def _report(self) -> None:
+        if self.reporter is not None:
+            self.reporter.push(self.state)
 
     def _execute(self, target: int, price: float, now_ms: int, reason: str) -> None:
         s = self.state
@@ -138,8 +144,9 @@ class PaperTrader:
         if drawdown >= self.max_drawdown_stop and not s["killed"]:
             self._execute(0, price, now_ms, "kill_switch")
             s["killed"] = True
-            s["equity_log"].append([now_ms, self.equity(price)])
+            s["equity_log"].append([now_ms, self.equity(price), price])
             self._save_state()
+            self._report()
             return {"killed": True, "equity": self.equity(price), "price": price, "acted": True}
 
         # Only re-evaluate the strategy when a NEW candle has closed.
@@ -156,8 +163,9 @@ class PaperTrader:
         # Log and persist only when something happened — polling every 30s
         # for weeks must not grow the state file into the megabytes.
         if new_candle or acted:
-            s["equity_log"].append([now_ms, self.equity(price)])
+            s["equity_log"].append([now_ms, self.equity(price), price])
             self._save_state()
+            self._report()
         elif s["peak_equity"] > prev_peak:
             # Persist peak improvements (without growing the log) so the kill
             # switch measures drawdown from the true observed peak even after
@@ -179,7 +187,8 @@ class PaperTrader:
             f"Paper trading {self.symbol} on {self.timeframe} candles with "
             f"{self.strategy.describe()} — fake ${s['starting_cash']:.2f}, live prices.\n"
             f"Signals are checked when a candle closes (every {tf_min} min); "
-            f"prices every {poll_seconds}s. Ctrl+C to stop. State: {self.state_path}\n",
+            f"prices every {poll_seconds}s. Ctrl+C to stop. State: {self.state_path}\n"
+            + ("Web dashboard reporting: ON\n" if self.reporter else ""),
             flush=True,
         )
         failures = 0

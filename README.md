@@ -18,6 +18,9 @@ strategy survives weeks of paper trading — and we do it together, carefully.
 complete step-by-step walkthrough from zero to your first (paper) trade, and
 the gated road to the first real one.
 
+There's also an optional **live web dashboard** (login-protected, hosted on
+Netlify + Supabase) to watch your bot from anywhere — see [WEB.md](WEB.md).
+
 ---
 
 ## Reality check (read this first)

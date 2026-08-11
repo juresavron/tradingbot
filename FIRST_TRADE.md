@@ -246,6 +246,10 @@ fine for paper: it resumes where it left off. A Raspberry Pi or any
 always-on machine is perfect. (Or run it inside `tmux`/`screen` if you
 know them.)
 
+Optional but pleasant: hook the bot to the **web dashboard** and do the
+daily check from your phone — equity curve, trades, and a LIVE/STALE badge
+that answers "is it alive?" at a glance. Setup in [WEB.md](WEB.md).
+
 **Daily 2-minute check** — two questions, in order:
 1. *Is it alive?* The newest line of `tail -5 paper.log` should be less
    than a minute old, and `pgrep -af "tradingbot paper"` should show the
