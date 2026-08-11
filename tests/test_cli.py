@@ -1,6 +1,8 @@
 import contextlib
 import io
+import tempfile
 import unittest
+from pathlib import Path
 
 from tradingbot.cli import main, parse_params
 
@@ -17,6 +19,15 @@ class TestCliErrors(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("error:", err)
         self.assertNotIn("Traceback", err)
+
+    def test_truncated_csv_is_a_clean_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.csv"
+            path.write_text("ts,open,high,low,close,volume\n1,2,3\n")
+            code, err = self.run_cli(["backtest", "--data", str(path), "--strategy", "sma_cross"])
+            self.assertEqual(code, 1)
+            self.assertIn("error:", err)
+            self.assertNotIn("Traceback", err)
 
     def test_invalid_strategy_params_are_a_clean_error(self):
         code, err = self.run_cli(

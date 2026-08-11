@@ -90,7 +90,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             print(f"error: {args.data} is not a valid candle CSV ({e})", file=sys.stderr)
             return 1
         source = Path(args.data).name

@@ -132,6 +132,7 @@ class PaperTrader:
 
         # Kill switch first: protect the account before anything else.
         eq = self.equity(price)
+        prev_peak = s["peak_equity"]
         s["peak_equity"] = max(s["peak_equity"], eq)
         drawdown = 1 - eq / s["peak_equity"] if s["peak_equity"] > 0 else 0.0
         if drawdown >= self.max_drawdown_stop and not s["killed"]:
@@ -157,6 +158,11 @@ class PaperTrader:
         if new_candle or acted:
             s["equity_log"].append([now_ms, self.equity(price)])
             self._save_state()
+        elif s["peak_equity"] > prev_peak:
+            # Persist peak improvements (without growing the log) so the kill
+            # switch measures drawdown from the true observed peak even after
+            # an ungraceful restart.
+            self._save_state()
         return {"killed": False, "equity": self.equity(price), "price": price, "acted": acted}
 
     # ---------------------------------------------------------------- loop
@@ -176,11 +182,26 @@ class PaperTrader:
             f"prices every {poll_seconds}s. Ctrl+C to stop. State: {self.state_path}\n",
             flush=True,
         )
+        failures = 0
         try:
             while True:
                 now_ms = int(time.time() * 1000)
-                candles = self.client.get_candles(self.symbol, self.timeframe, limit=self.lookback)
-                price = self.client.get_price(self.symbol)
+                try:
+                    candles = self.client.get_candles(self.symbol, self.timeframe, limit=self.lookback)
+                    price = self.client.get_price(self.symbol)
+                except RuntimeError as e:
+                    # A weeks-long experiment must survive wifi drops and API
+                    # hiccups: back off and retry instead of dying on one poll.
+                    failures += 1
+                    wait = min(poll_seconds * 2 ** min(failures, 5), 900)
+                    stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                    print(
+                        f"[{stamp}] network problem (attempt {failures}), retrying in {wait}s: {e}",
+                        flush=True,
+                    )
+                    time.sleep(wait)
+                    continue
+                failures = 0
                 status = self.step(price, candles, now_ms)
                 eq = status["equity"]
                 ret = eq / s["starting_cash"] - 1
@@ -201,7 +222,10 @@ class PaperTrader:
                     break
                 time.sleep(poll_seconds)
         except KeyboardInterrupt:
-            eq = self.equity(self.client.get_price(self.symbol))
+            try:
+                eq = self.equity(self.client.get_price(self.symbol))
+            except RuntimeError:
+                eq = s["equity_log"][-1][1] if s["equity_log"] else s["cash"]
             print(
                 f"\nStopped. Equity ${eq:,.2f} "
                 f"({eq / s['starting_cash'] - 1:+.2%}) over {len(s['trades'])} trades. "

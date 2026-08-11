@@ -98,10 +98,12 @@ access; your `fetch` gets the real thing):
 ──────────────────────────────────────────────────────────
  Final equity          $111.04
  Total return          +11.04%
+ CAGR                  +11.04%/yr
  Max drawdown          -39.23%
  Sharpe (annualized)   0.46
  Trades                95  (win rate 33%)
  Avg win / avg loss    +5.42% / -2.30%
+ Time in market        52%
  Fees paid             $17.03
 ──────────────────────────────────────────────────────────
  Buy & hold return     +74.31%  (max DD -41.79%)
@@ -114,7 +116,8 @@ the last line, which says just *buying and holding* would have made +74%.
 The strategy traded 95 times, paid $17 in costs, was wrong 67% of the time,
 and at its worst moment was down 39% ("max drawdown"). This is the whole
 point of the tool: **it stops you from believing a bad strategy.** The
-benchmark to beat is never zero — it's doing nothing.
+benchmark to beat is never zero — it's doing nothing. (The live report
+also draws a small ASCII chart of your equity over time.)
 
 ## What you'll learn from the code (reading guide)
 

@@ -78,6 +78,17 @@ class TestPaperTrader(unittest.TestCase):
             self.assertEqual(reloaded.state["qty"], qty)
             self.assertEqual(len(reloaded.state["trades"]), 1)
 
+    def test_new_peak_is_persisted_without_growing_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trader = make_trader(tmp, AlwaysLong(), fee=0.0, slippage=0.0)
+            trader.step(price=100.0, candles=candles_upto(5), now_ms=99 * HOUR)
+            entries = len(trader.state["equity_log"])
+            # Same candle, higher price: peak must persist, log must not grow.
+            trader.step(price=120.0, candles=candles_upto(5), now_ms=99 * HOUR + 30_000)
+            reloaded = make_trader(tmp, AlwaysLong(), fee=0.0, slippage=0.0)
+            self.assertAlmostEqual(reloaded.state["peak_equity"], 120.0)
+            self.assertEqual(len(reloaded.state["equity_log"]), entries)
+
     def test_kill_switch_flattens_and_stops(self):
         with tempfile.TemporaryDirectory() as tmp:
             trader = make_trader(tmp, AlwaysLong(), fee=0.0, slippage=0.0, max_drawdown_stop=0.25)
