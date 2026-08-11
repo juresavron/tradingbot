@@ -108,11 +108,14 @@ class TestEndToEnd(unittest.TestCase):
         pnl_sum = sum(t.pnl for t in result.trades)
         self.assertAlmostEqual(m["final_equity"], m["starting_cash"] + pnl_sum, places=6)
 
-    def test_buy_hold_strategy_matches_benchmark(self):
+    def test_buy_hold_strategy_matches_benchmark_exactly(self):
+        # The benchmark uses the same execution rule as strategies (enter at
+        # the second candle's open), so buy_hold must equal it to float noise.
         candles = generate(days=90, timeframe="1h", seed=3, end_ms=1_700_000_000_000)
         result = run_backtest(candles, BuyHold(), timeframe="1h")
         m = result.metrics
-        self.assertAlmostEqual(m["total_return_pct"], m["bh_return_pct"], delta=0.3)
+        self.assertAlmostEqual(m["total_return_pct"], m["bh_return_pct"], places=6)
+        self.assertAlmostEqual(m["edge_vs_bh_pct"], 0.0, places=6)
 
 
 if __name__ == "__main__":

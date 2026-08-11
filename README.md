@@ -14,6 +14,10 @@ idea  →  backtest (past data)  →  paper trade (live data, fake money)  →  
 Real money is deliberately **not wired up yet**. That step comes only after a
 strategy survives weeks of paper trading — and we do it together, carefully.
 
+**Ready to actually start? Follow [FIRST_TRADE.md](FIRST_TRADE.md)** — the
+complete step-by-step walkthrough from zero to your first (paper) trade, and
+the gated road to the first real one.
+
 ---
 
 ## Reality check (read this first)
@@ -74,7 +78,7 @@ python3 -m tradingbot strategies                  # list strategies + parameters
 python3 -m tradingbot backtest --show-trades ...  # print every trade
 python3 -m tradingbot backtest --stop 0.05 ...    # add a 5% stop-loss
 python3 -m tradingbot synth --days 365            # offline fake data (for testing the machinery)
-python3 -m unittest discover -s tests             # run the test suite (26 tests)
+python3 -m unittest discover -s tests             # run the test suite
 ```
 
 If `fetch` fails, the exchange API may be blocked on your network (some
@@ -100,8 +104,8 @@ access; your `fetch` gets the real thing):
  Avg win / avg loss    +5.42% / -2.30%
  Fees paid             $17.03
 ──────────────────────────────────────────────────────────
- Buy & hold return     +74.14%  (max DD -41.79%)
- Edge vs buy & hold    -63.10 pts
+ Buy & hold return     +74.31%  (max DD -41.79%)
+ Edge vs buy & hold    -63.27 pts
 ──────────────────────────────────────────────────────────
 ```
 

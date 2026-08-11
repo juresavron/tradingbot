@@ -4,7 +4,8 @@ This is the mandatory step between backtesting and risking a single real
 euro. It answers the question a backtest can't: does the strategy survive
 contact with the present, not just the past?
 
-State is persisted to a JSON file after every step, so you can stop the bot
+State is persisted to a JSON file whenever something happens (a candle
+closes, a trade executes, the kill switch fires), so you can stop the bot
 (Ctrl+C) and restart it later without losing the account.
 
 A kill switch flattens the position and stops the bot if equity drops more
@@ -141,7 +142,8 @@ class PaperTrader:
             return {"killed": True, "equity": self.equity(price), "price": price, "acted": True}
 
         # Only re-evaluate the strategy when a NEW candle has closed.
-        if candles and candles[-1].ts > s["last_candle_ts"]:
+        new_candle = bool(candles) and candles[-1].ts > s["last_candle_ts"]
+        if new_candle:
             s["last_candle_ts"] = candles[-1].ts
             signals = self.strategy.signals(candles)
             target = signals[-1]
@@ -150,8 +152,11 @@ class PaperTrader:
                 self._execute(target, price, now_ms, "signal")
                 acted = True
 
-        s["equity_log"].append([now_ms, self.equity(price)])
-        self._save_state()
+        # Log and persist only when something happened — polling every 30s
+        # for weeks must not grow the state file into the megabytes.
+        if new_candle or acted:
+            s["equity_log"].append([now_ms, self.equity(price)])
+            self._save_state()
         return {"killed": False, "equity": self.equity(price), "price": price, "acted": acted}
 
     # ---------------------------------------------------------------- loop

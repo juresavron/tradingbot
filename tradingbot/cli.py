@@ -80,7 +80,19 @@ def cmd_synth(args: argparse.Namespace) -> int:
 def cmd_backtest(args: argparse.Namespace) -> int:
     strategy = make_strategy(args.strategy, parse_params(args.params))
     if args.data:
-        candles = load_csv(args.data)
+        try:
+            candles = load_csv(args.data)
+        except OSError as e:
+            print(f"error: cannot read {args.data}: {e.strerror or e}", file=sys.stderr)
+            print(
+                "hint: create a data file first with `python3 -m tradingbot fetch` "
+                "or `python3 -m tradingbot synth`",
+                file=sys.stderr,
+            )
+            return 1
+        except (KeyError, ValueError) as e:
+            print(f"error: {args.data} is not a valid candle CSV ({e})", file=sys.stderr)
+            return 1
         source = Path(args.data).name
     else:
         print(f"No --data file given, fetching {args.days} days of {args.symbol} {args.timeframe}...")

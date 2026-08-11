@@ -58,6 +58,16 @@ class TestPaperTrader(unittest.TestCase):
             self.assertFalse(status["acted"])
             self.assertEqual(len(trader.state["trades"]), trades_before)
 
+    def test_idle_polls_do_not_grow_the_state_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trader = make_trader(tmp, AlwaysLong(), fee=0.0, slippage=0.0)
+            trader.step(price=100.0, candles=candles_upto(5), now_ms=99 * HOUR)
+            entries_after_candle = len(trader.state["equity_log"])
+            # 10 idle polls on the same candle must not append equity entries.
+            for poll in range(10):
+                trader.step(price=100.0 + poll, candles=candles_upto(5), now_ms=99 * HOUR + poll)
+            self.assertEqual(len(trader.state["equity_log"]), entries_after_candle)
+
     def test_state_survives_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
             trader = make_trader(tmp, AlwaysLong(), fee=0.0, slippage=0.0)

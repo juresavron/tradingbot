@@ -172,10 +172,13 @@ def run_backtest(
     final_equity = equity_values[-1]
     days = (last.ts - candles[0].ts) / 86_400_000 or 1.0
 
-    # Buy & hold benchmark with the same cost model.
-    bh_fill = candles[0].open * (1 + slippage)
+    # Buy & hold benchmark with the same cost model AND the same execution
+    # rule: enter at the second candle's open, the earliest moment any signal
+    # can execute. Otherwise the benchmark gets a one-bar head start and even
+    # the buy_hold strategy would appear to beat "buy & hold".
+    bh_fill = candles[1].open * (1 + slippage)
     bh_qty = starting_cash / (bh_fill * (1 + fee))
-    bh_curve = [bh_qty * c.close for c in candles]
+    bh_curve = [starting_cash] + [bh_qty * c.close for c in candles[1:]]
     bh_final = bh_qty * last.close * (1 - slippage) * (1 - fee)
 
     wins = [t for t in result.trades if t.pnl > 0]
