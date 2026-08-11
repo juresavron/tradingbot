@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Market data downloads (regenerate with: python3 -m tradingbot fetch)
+data/
+
+# Paper trading account state
+paper_state*.json
+*.tmp
+
+# Secrets — API keys NEVER go in git. Ever.
+.env
+*.key
