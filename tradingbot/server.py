@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .auth import normalize_email, validate_password_hash, verify_password
 from .orders import TERMINAL_STATUSES
 
 COOKIE = "tradingbot_session"
@@ -168,7 +169,9 @@ class BodyLimitMiddleware:
 
 class Login(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    token: str = Field(min_length=1, max_length=512)
+    token: str | None = Field(default=None, min_length=1, max_length=512)
+    email: str | None = Field(default=None, min_length=3, max_length=254)
+    password: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class Control(BaseModel):
@@ -176,12 +179,21 @@ class Control(BaseModel):
     action: str = Field(min_length=1, max_length=30)
 
 
-def create_app(*, db_path=None, token=None, public_origin=None, start_worker=True, runtime=None) -> FastAPI:
+def create_app(*, db_path=None, token=None, public_origin=None, start_worker=True, runtime=None,
+               owner_email=None, owner_password_hash=None) -> FastAPI:
     db_path = db_path or os.environ.get("TRADINGBOT_DB", "data/server.sqlite3")
     token = token if token is not None else os.environ.get("TRADINGBOT_DASHBOARD_TOKEN", "")
     if not isinstance(token, str) or not 32 <= len(token) <= 512:
         raise ValueError("Set TRADINGBOT_DASHBOARD_TOKEN to a private value of 32-512 characters")
     token_hash = hashlib.sha256(token.encode()).digest()
+    owner_email = os.environ.get("TRADINGBOT_OWNER_EMAIL", "") if owner_email is None else owner_email
+    owner_password_hash = (os.environ.get("TRADINGBOT_OWNER_PASSWORD_HASH", "")
+                           if owner_password_hash is None else owner_password_hash)
+    if bool(owner_email) != bool(owner_password_hash):
+        raise ValueError("Configure both the owner email and password hash")
+    if owner_email:
+        owner_email = normalize_email(owner_email)
+        validate_password_hash(owner_password_hash)
     origin = public_origin if public_origin is not None else os.environ.get("PUBLIC_ORIGIN")
     if origin:
         parsed = urlsplit(origin)
@@ -195,7 +207,7 @@ def create_app(*, db_path=None, token=None, public_origin=None, start_worker=Tru
     allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
     if origin:
         allowed_hosts.append(urlsplit(origin).hostname)
-    sessions: dict[str, float] = {}
+    sessions: dict[str, tuple[float, str | None]] = {}
     failed_logins: dict[str, deque] = defaultdict(deque)
     auth_lock = RLock()
 
@@ -233,7 +245,7 @@ def create_app(*, db_path=None, token=None, public_origin=None, start_worker=Tru
             return False
         digest = hashlib.sha256(cookie.encode()).hexdigest()
         with auth_lock:
-            expiry = sessions.get(digest, 0)
+            expiry, _email = sessions.get(digest, (0, None))
             if expiry <= time.monotonic():
                 sessions.pop(digest, None)
                 return False
@@ -292,7 +304,11 @@ def create_app(*, db_path=None, token=None, public_origin=None, start_worker=Tru
 
     @app.get("/api/session")
     def session(request: Request):
-        return {"authenticated": authenticated(request)}
+        signed_in = authenticated(request)
+        digest = hashlib.sha256(request.cookies.get(COOKIE, "").encode()).hexdigest()
+        with auth_lock:
+            email = sessions.get(digest, (0, None))[1] if signed_in else None
+        return {"authenticated": signed_in, "email": email}
 
     @app.post("/api/login")
     def login(body: Login, request: Request):
@@ -308,18 +324,27 @@ def create_app(*, db_path=None, token=None, public_origin=None, start_worker=Tru
                 attempts.popleft()
             if len(attempts) >= 5:
                 raise HTTPException(429, "Too many attempts; wait a minute")
-            if not hmac.compare_digest(hashlib.sha256(body.token.encode()).digest(), token_hash):
+            valid = False
+            if body.token is not None and body.email is None and body.password is None:
+                # Retain the existing private operator token for recovery/API use.
+                valid = hmac.compare_digest(hashlib.sha256(body.token.encode()).digest(), token_hash)
+            elif body.email is not None and body.password is not None and body.token is None and owner_email:
+                # Always derive the password hash, including for unknown addresses.
+                password_matches = verify_password(body.password, owner_password_hash)
+                email_matches = hmac.compare_digest(body.email.strip().casefold().encode(), owner_email.encode())
+                valid = password_matches and email_matches
+            if not valid:
                 attempts.append(now)
-                raise HTTPException(401, "Invalid dashboard token")
+                raise HTTPException(401, "Invalid email or password")
             attempts.clear()
-            for digest, expiry in list(sessions.items()):
+            for digest, (expiry, _email) in list(sessions.items()):
                 if expiry <= now:
                     sessions.pop(digest, None)
             if len(sessions) >= 100:
                 sessions.pop(next(iter(sessions)))
             cookie = secrets.token_urlsafe(32)
-            sessions[hashlib.sha256(cookie.encode()).hexdigest()] = now + SESSION_SECONDS
-        response = JSONResponse({"authenticated": True})
+            sessions[hashlib.sha256(cookie.encode()).hexdigest()] = (now + SESSION_SECONDS, owner_email or None)
+        response = JSONResponse({"authenticated": True, "email": owner_email or None})
         response.set_cookie(COOKIE, cookie, httponly=True, secure=secure_cookie,
                             samesite="strict", max_age=SESSION_SECONDS, path="/")
         return response

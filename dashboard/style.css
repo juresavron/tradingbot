@@ -844,6 +844,7 @@ th:last-child,td:last-child {
 
 .login-card input {
   width:100%;
+  margin-bottom:16px;
 }
 
 input,select,textarea {

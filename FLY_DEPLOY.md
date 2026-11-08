@@ -113,6 +113,20 @@ collecting a large feed.
 
 ## Configure authentication securely
 
+The dashboard supports one operator-provisioned owner account. Provision its
+normalized email as `TRADINGBOT_OWNER_EMAIL` and the output of
+`tradingbot.auth.hash_password` as `TRADINGBOT_OWNER_PASSWORD_HASH`, using Fly
+secrets. Both values must be present together. Only a salted scrypt hash is
+stored on Fly; never put the password, hash, or secrets in Git or image build
+arguments. The sign-in screen accepts the owner's email and password. There
+is no public registration endpoint. Existing authenticated sessions expire
+after eight hours and are revoked by logout or a server restart.
+
+Keep `TRADINGBOT_DASHBOARD_TOKEN` as a separate private recovery credential for
+the existing API login. It is not the owner's password and is not displayed
+on the sign-in screen. Provisioning an owner account does not change trading
+state or create an additional simulation.
+
 Choose a random, URL-safe dashboard token of at least 32 characters in your
 password manager and retain it there for dashboard access. Never place it in
 `fly.toml`, a Docker build argument, source files, a commit, or chat.

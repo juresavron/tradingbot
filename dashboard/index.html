@@ -14,10 +14,12 @@
     <section class="login-card" aria-labelledby="login-title">
       <div class="wordmark">Tradingbot<span class="brand-dot" aria-hidden="true"></span></div>
       <h1 id="login-title">Sign in</h1>
-      <p>Use your server access token.</p>
+      <p>Sign in to your account.</p>
       <form id="login-form">
-        <label for="access-token">Access token</label>
-        <input id="access-token" type="password" autocomplete="current-password" required>
+        <label for="login-email">Email</label>
+        <input id="login-email" type="email" autocomplete="username" maxlength="254" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" type="password" autocomplete="current-password" maxlength="256" required>
         <p id="login-error" class="form-error" role="alert"></p>
         <button id="login-submit" class="button primary" type="submit">Sign in</button>
       </form>

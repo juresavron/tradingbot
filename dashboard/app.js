@@ -38,6 +38,7 @@ const REASONS = {
   news_unavailable: "Fresh news is required but unavailable.",
 };
 let snapshot = null;
+let signedInEmail = null;
 let pollTimer = null;
 let refreshRequest = null;
 let requestSequence = 0;
@@ -129,13 +130,14 @@ function showLogin() {
   stopPolling();
   sessionEpoch += 1;
   snapshot = null;
+  signedInEmail = null;
   appliedSequence = 0;
   pendingRequests.clear();
   $("boot-screen").hidden = true;
   $("app-shell").hidden = true;
   $("login-screen").hidden = false;
   for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
-  $("access-token").focus();
+  $("login-email").focus();
 }
 function toast(message, error = false) {
   clearTimeout(toastTimer);
@@ -217,7 +219,8 @@ async function refresh() {
   catch (error) { if (currentResponse(request)) connection(false, error.message); }
   finally { if (refreshRequest === request) refreshRequest = null; }
 }
-async function enterApp() {
+async function enterApp(session) {
+  signedInEmail = session?.email || null;
   $("boot-screen").hidden = true;
   $("login-screen").hidden = true;
   $("app-shell").hidden = false;
@@ -227,7 +230,7 @@ async function enterApp() {
 }
 async function bootstrap() {
   $("retry-connection").hidden = true;
-  try { const session = await api("/api/session"); if (session.authenticated) await enterApp(); else showLogin(); }
+  try { const session = await api("/api/session"); if (session.authenticated) await enterApp(session); else showLogin(); }
   catch (error) { $("boot-screen").querySelector("p").textContent = error.message; $("retry-connection").hidden = false; }
 }
 
@@ -268,7 +271,7 @@ function render(data) {
   const source = status.source || config.source;
   $("source-badge").textContent = source === "demo" ? "Demo replay" : source === "binance" ? "Binance public" : "No data source";
   $("source-notice").textContent = source === "demo" ? "Demo candles. All orders and funds are simulated." : source === "binance" ? (status.error || !finite(status.price) ? "Binance selected; waiting for valid market data. Orders remain simulated." : "Binance public prices. All orders and funds are simulated.") : "No market source connected. Orders and funds are simulated.";
-  $("account-identity").textContent = data.account_id || (data.revision ? "Simulation " + data.revision : "Simulation account");
+  $("account-identity").textContent = signedInEmail || (data.revision ? "Simulation " + data.revision : "Simulation account");
   $("metric-equity").textContent = money(portfolio.equity);
   $("metric-return").textContent = percent(portfolio.return_pct, true);
   $("metric-return").className = Number(portfolio.return_pct) > 0 ? "positive" : Number(portfolio.return_pct) < 0 ? "negative" : "neutral";
@@ -419,7 +422,11 @@ function openSettings() {
 
 $("login-form").addEventListener("submit", async (event) => {
   event.preventDefault(); $("login-submit").disabled = true; $("login-error").textContent = "";
-  try { await api("/api/login", { token: $("access-token").value }); $("access-token").value = ""; await enterApp(); }
+  try {
+    const session = await api("/api/login", { email: $("login-email").value.trim(), password: $("login-password").value });
+    $("login-password").value = "";
+    await enterApp(session);
+  }
   catch (error) { $("login-error").textContent = error.message; }
   finally { $("login-submit").disabled = false; }
 });

@@ -301,5 +301,76 @@ class TestControlServer(unittest.TestCase):
                 runtime.shutdown()
 
 
+@unittest.skipIf(TestClient is None, "Optional server dependencies are not installed")
+class TestOwnerLogin(unittest.TestCase):
+    EMAIL = "owner@example.com"
+    PASSWORD = "Only-a-test-password-123"
+    TOKEN = "test-dashboard-token-32-characters-long"
+
+    @classmethod
+    def setUpClass(cls):
+        from tradingbot.auth import hash_password
+        cls.PASSWORD_HASH = hash_password(cls.PASSWORD)
+
+    def app(self, **kwargs):
+        return create_app(token=self.TOKEN, public_origin="https://bot.example", runtime=FakeRuntime(),
+                          owner_email=kwargs.get("owner_email", self.EMAIL),
+                          owner_password_hash=kwargs.get("owner_password_hash", self.PASSWORD_HASH),
+                          db_path="/tmp/test-tradingbot-owner-unused.sqlite3", start_worker=False)
+
+    def login(self, client, **kwargs):
+        return client.post("/api/login", json={"email": kwargs.get("email", self.EMAIL),
+                                              "password": kwargs.get("password", self.PASSWORD)},
+                           headers={"Origin": "https://bot.example"})
+
+    def test_email_login_identifies_owner_and_logout_revokes_copied_session(self):
+        with TestClient(self.app(), base_url="https://bot.example") as client:
+            self.assertEqual(client.get("/api/session").json(), {"authenticated": False, "email": None})
+            response = self.login(client, email=" OWNER@Example.com ")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"authenticated": True, "email": self.EMAIL})
+            self.assertIn("Secure", response.headers["set-cookie"])
+            self.assertIn("HttpOnly", response.headers["set-cookie"])
+            self.assertEqual(client.get("/api/session").json()["email"], self.EMAIL)
+            copied_cookie = client.cookies.get(COOKIE)
+            self.assertEqual(client.get("/api/state").status_code, 200)
+            client.post("/api/logout", json={}, headers={"Origin": "https://bot.example"})
+            self.assertEqual(client.get("/api/state", headers={"Cookie": COOKIE + "=" + copied_cookie}).status_code, 401)
+
+    def test_wrong_email_and_password_get_same_error_and_cannot_control_bot(self):
+        with TestClient(self.app(), base_url="https://bot.example") as client:
+            wrong_email = self.login(client, email="someone-else@example.com")
+            wrong_password = self.login(client, password="wrong-password")
+            self.assertEqual(wrong_email.status_code, 401)
+            self.assertEqual(wrong_password.status_code, 401)
+            self.assertEqual(wrong_email.json(), wrong_password.json())
+            self.assertNotIn(self.EMAIL, wrong_email.text)
+            self.assertEqual(client.post("/api/control", json={"action": "start"},
+                                         headers={"Origin": "https://bot.example"}).status_code, 401)
+
+    def test_owner_login_survives_new_application_but_old_sessions_do_not(self):
+        with TestClient(self.app(), base_url="https://bot.example") as first:
+            self.assertEqual(self.login(first).status_code, 200)
+            old_cookie = first.cookies.get(COOKIE)
+        with TestClient(self.app(), base_url="https://bot.example") as second:
+            self.assertEqual(second.get("/api/state", headers={"Cookie": COOKIE + "=" + old_cookie}).status_code, 401)
+            self.assertEqual(self.login(second).status_code, 200)
+
+    def test_rate_limit_and_input_limits_also_apply_to_password_logins(self):
+        with TestClient(self.app(), base_url="https://bot.example") as client:
+            self.assertEqual(self.login(client, password="x" * 257).status_code, 422)
+            for _ in range(5):
+                self.assertEqual(self.login(client, password="wrong").status_code, 401)
+            self.assertEqual(self.login(client).status_code, 429)
+
+    def test_partial_or_invalid_account_configuration_fails_at_startup(self):
+        for config in ({"owner_email": ""}, {"owner_password_hash": ""},
+                       {"owner_password_hash": "plaintext-password"}, {"owner_email": "invalid"}):
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                self.app(**config)
+        with TestClient(self.app(owner_email="", owner_password_hash=""), base_url="https://bot.example") as client:
+            self.assertEqual(self.login(client).status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
