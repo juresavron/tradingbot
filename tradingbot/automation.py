@@ -14,7 +14,7 @@ import math
 import threading
 import time
 from contextlib import nullcontext
-from decimal import Decimal, ROUND_DOWN, localcontext
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, localcontext
 from pathlib import Path
 
 from .candles import TIMEFRAME_MS, Candle
@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
     "strategy": "donchian_breakout", "params": {}, "starting_cash": 300,
     "max_order_notional": 75, "position_fraction": 0.25,
     "max_drawdown": 0.10, "news_policy": "observe",
+    "fee": 0.001, "slippage": 0.0,
 }
 
 
@@ -108,8 +109,25 @@ class AutomationRuntime:
                 """CREATE TABLE IF NOT EXISTS automation_equity (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, revision INTEGER NOT NULL,
                     at_ms INTEGER NOT NULL, equity REAL NOT NULL, price REAL NOT NULL)""",
+                """CREATE TABLE IF NOT EXISTS automation_fill_costs (
+                    client_order_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+                    at_ms INTEGER NOT NULL, market_price TEXT NOT NULL,
+                    fill_price TEXT NOT NULL, quantity TEXT NOT NULL,
+                    fee_quote TEXT NOT NULL, slippage_quote TEXT NOT NULL)""",
+                """CREATE TABLE IF NOT EXISTS automation_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, revision INTEGER NOT NULL,
+                    at_ms INTEGER NOT NULL, kind TEXT NOT NULL, detail_json TEXT NOT NULL)""",
             ):
                 memory.connection.execute(sql)
+            # Existing wallets keep their original 0.1% fee and zero slippage.
+            # Cost changes require a new revision, just like strategy changes.
+            for prior in memory.connection.execute("SELECT revision,config_json FROM automation_revisions").fetchall():
+                config = json.loads(prior["config_json"])
+                if "fee" not in config or "slippage" not in config:
+                    config.setdefault("fee", 0.001)
+                    config.setdefault("slippage", 0.0)
+                    memory.connection.execute("UPDATE automation_revisions SET config_json=? WHERE revision=?",
+                                              (_json(config), prior["revision"]))
             # Upgrade existing simulations once, preserving paused, halted,
             # and pending-close intent. Restart must never reset controls.
             for row in memory.connection.execute("""SELECT r.revision,r.state_json
@@ -216,6 +234,12 @@ class AutomationRuntime:
             raise ValueError("position_fraction and max_drawdown cannot exceed 1")
         if config["news_policy"] not in ("observe", "require-fresh"):
             raise ValueError("news_policy must be observe or require-fresh")
+        for key in ("fee", "slippage"):
+            value = config[key]
+            if (isinstance(value, bool) or not isinstance(value, (int, float, str))
+                    or not math.isfinite(float(value)) or not 0 <= float(value) < 0.1):
+                raise ValueError(f"{key} must be finite and in [0, 0.1)")
+            config[key] = float(value)
         return config
 
     def _create_revision(self, memory, config):
@@ -256,9 +280,11 @@ class AutomationRuntime:
     def _execution(memory, row):
         config = row["config"]
         quote = config["symbol"].partition("/")[2]
-        broker = SimulatedBroker(memory, account_id=row["account_id"], initial_balances={quote: str(config["starting_cash"])})
+        broker = SimulatedBroker(memory, account_id=row["account_id"], initial_balances={quote: str(config["starting_cash"])},
+                                 fee=str(config["fee"]))
         store = ExecutionStore(memory, account_id=row["account_id"], environment=broker.environment,
-                               scope=broker.scope, limits=RiskLimits(max_order_notional=str(config["max_order_notional"])))
+                               scope=broker.scope, limits=RiskLimits(max_order_notional=str(config["max_order_notional"]),
+                                   fee_buffer=max(Decimal("0.002"), _decimal(config["fee"]))))
         return broker, store, ExecutionEngine(store, broker)
 
     @staticmethod
@@ -413,6 +439,7 @@ class AutomationRuntime:
 
     def _finish_cycle(self, memory, row, broker, plan, action, reason, *, advance=True):
         state = row["state"]
+        previous_error = state["error"]
         state["last_action"], state["last_reason"] = action, reason
         state["heartbeat_ms"] = max(state["heartbeat_ms"] or 0, plan["at_ms"])
         if advance:
@@ -428,6 +455,24 @@ class AutomationRuntime:
             state["flatten"] = False
             state["exit_pending"] = False
         with memory.transaction():
+            if previous_error:
+                self._record_event(memory, row, plan["at_ms"], "recovered", {"previous_error": previous_error})
+            if action in ("BUY", "SELL"):
+                order = memory.connection.execute("SELECT client_order_id,snapshot_json FROM execution_orders WHERE account_id=? AND request_id=? AND status='FILLED'",
+                                                  (row["account_id"], plan["request_id"])).fetchone()
+                if order is not None:
+                    fill = json.loads(order["snapshot_json"])
+                    quantity = _decimal(fill["executed_quantity"])
+                    quote = _decimal(fill["cumulative_quote_quantity"])
+                    reference = _decimal(plan.get("reference_price", plan["price"]))
+                    with localcontext() as context:
+                        context.prec = 100
+                        fill_price = quote / quantity
+                        slippage = max(Decimal("0"), (fill_price - reference if action == "BUY" else reference - fill_price) * quantity)
+                        fee = quote * _decimal(row["config"]["fee"])
+                    memory.connection.execute("INSERT OR IGNORE INTO automation_fill_costs VALUES (?,?,?,?,?,?,?,?)",
+                        (order["client_order_id"], row["revision"], plan["at_ms"], _text(reference),
+                         _text(fill_price), _text(quantity), _text(fee), _text(slippage)))
             memory.connection.execute("""INSERT OR IGNORE INTO automation_decisions
                 (revision,cycle_id,at_ms,candle_ts,target,action,reason,news_ids_json,price,strategy)
                 VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -436,6 +481,11 @@ class AutomationRuntime:
             memory.connection.execute("INSERT INTO automation_equity(revision,at_ms,equity,price) VALUES (?,?,?,?)",
                                       (row["revision"], plan["market_time_ms"], portfolio["equity"], state["price"]))
             self._write_state(memory, row)
+
+    @staticmethod
+    def _record_event(memory, row, at_ms, kind, detail):
+        memory.connection.execute("INSERT INTO automation_events(revision,at_ms,kind,detail_json) VALUES (?,?,?,?)",
+                                  (row["revision"], at_ms, kind, _json(detail)))
 
     def _authorize_entry(self, memory, row, plan):
         """Local-only check inside ExecutionEngine's submit-claim transaction."""
@@ -478,7 +528,9 @@ class AutomationRuntime:
             row["state"]["last_action"] = "BLOCKED"
             row["state"]["error"] = "execution_outcome_unresolved"
             row["state"]["last_reason"] = "Resolve the pending order before new decisions"
-            self._save(memory, row)
+            with memory.transaction():
+                self._record_event(memory, row, _now(), "error", {"code": "execution_outcome_unresolved"})
+                self._write_state(memory, row)
             return
         if order["last_error"] == "submission_not_authorized":
             self._refresh_control(memory, row)
@@ -555,6 +607,9 @@ class AutomationRuntime:
                     bar_ts = history[-1].ts
                     target = self._strategy(config).signals(history)[-1]
                     if bar_ts == state["last_decision_bar"]:
+                        if state["error"]:
+                            with memory.transaction():
+                                self._record_event(memory, row, at_ms, "recovered", {"previous_error": state["error"]})
                         state["error"] = None
                         self._save(memory, row)
                         return self.snapshot()
@@ -571,9 +626,14 @@ class AutomationRuntime:
                     price = (market["price"] / rules.tick_size).to_integral_value(rounding=ROUND_DOWN) * rules.tick_size
                     if price <= 0:
                         raise ValueError("market_price_below_tick")
+                    reference_price = price
+                    slippage = _decimal(config["slippage"])
                     tradable_owned = owned >= rules.min_qty and owned * price >= rules.min_notional
                     if forced_exit or (owned and target == 0):
                         if owned:
+                            price = (reference_price * (Decimal("1") - slippage) / rules.tick_size).to_integral_value(rounding=ROUND_DOWN) * rules.tick_size
+                            if price <= 0:
+                                raise ValueError("market_price_below_tick")
                             quantity = min(owned, _decimal(config["max_order_notional"]) / price)
                             side = "SELL"
                             state["exit_pending"] = True
@@ -585,6 +645,7 @@ class AutomationRuntime:
                         elif config["news_policy"] == "require-fresh" and not articles:
                             reason = "blocked_no_fresh_news"
                         elif not self._stop.is_set():
+                            price = (reference_price * (Decimal("1") + slippage) / rules.tick_size).to_integral_value(rounding=ROUND_UP) * rules.tick_size
                             budget = min(_decimal(config["max_order_notional"]), balances.get(rules.quote_asset, Decimal("0")) * _decimal(config["position_fraction"]))
                             quantity = budget / (Decimal("1") + store.limits.fee_buffer) / price
                             side = "BUY"
@@ -599,6 +660,7 @@ class AutomationRuntime:
                         "market_time_ms": market["market_time_ms"], "next_cursor": market["next_cursor"],
                         "control_generation": entry_generation,
                         "side": side, "quantity": _text(quantity), "price": _text(price)}
+                plan["reference_price"] = _text(reference_price)
                 if side is not None and (not quantity or quantity * price < rules.min_notional):
                     side = plan["side"] = None
                     plan["reason"] = "position_or_budget_below_minimum_order"
@@ -620,7 +682,9 @@ class AutomationRuntime:
                 state["error"] = str(exc) if isinstance(exc, ValueError) and str(exc) in safe_codes else "market_or_execution_unavailable"
                 state["last_action"] = "BLOCKED"
                 state["last_reason"] = "Waiting for valid data or execution reconciliation"
-                self._save(memory, row)
+                with memory.transaction():
+                    self._record_event(memory, row, at_ms, "error", {"code": state["error"]})
+                    self._write_state(memory, row)
         return self.snapshot()
 
     def snapshot(self) -> dict:
@@ -644,7 +708,15 @@ class AutomationRuntime:
                 decision["news_ids"] = json.loads(decision.pop("news_ids_json"))
                 decisions.append(decision)
             equity = [dict(item) for item in memory.connection.execute("SELECT at_ms,equity,price FROM automation_equity WHERE revision=? ORDER BY id DESC LIMIT 200", (row["revision"],))][::-1]
-            metrics = memory.connection.execute("SELECT COUNT(*),SUM(CASE WHEN status='FILLED' THEN 1 ELSE 0 END) FROM execution_orders WHERE account_id=?", (row["account_id"],)).fetchone()
+            metrics = memory.connection.execute("""SELECT COUNT(*),SUM(CASE WHEN status='FILLED' THEN 1 ELSE 0 END),
+                COALESCE(SUM(CASE WHEN status='FILLED' THEN CAST(json_extract(snapshot_json,'$.cumulative_quote_quantity') AS REAL) ELSE 0 END),0)
+                FROM execution_orders WHERE account_id=?""", (row["account_id"],)).fetchone()
+            slippage_paid = memory.connection.execute("SELECT COALESCE(SUM(CAST(slippage_quote AS REAL)),0) FROM automation_fill_costs WHERE revision=?", (row["revision"],)).fetchone()[0]
+            events = []
+            for item in memory.connection.execute("SELECT at_ms,kind,detail_json FROM automation_events WHERE revision=? ORDER BY id DESC LIMIT 50", (row["revision"],)):
+                event = dict(item)
+                event["detail"] = json.loads(event.pop("detail_json"))
+                events.append(event)
             halted = state["killed"] or state["replay_complete"]
             if row["control"]["generation"] > state.get("applied_control_generation", 0):
                 state["last_reason"] = {"start": "started", "pause": "paused", "flatten": "flatten_requested"}[row["control"]["action"]]
@@ -664,7 +736,9 @@ class AutomationRuntime:
                     "portfolio": portfolio, "equity": equity, "orders": orders, "decisions": decisions,
                     "news": memory.recent_news(_now(), config["symbol"].split("/")[0], 86_400_000,
                                                limit=50, include_body=False),
-                    "metrics": {"n_orders": metrics[0], "n_filled": metrics[1] or 0},
+                    "metrics": {"n_orders": metrics[0], "n_filled": metrics[1] or 0,
+                                "fees_paid": metrics[2] * config["fee"], "slippage_paid": slippage_paid},
+                    "events": events,
                     "capabilities": {"execution": "simulation", "llm": False}}
 
     def start_worker(self):

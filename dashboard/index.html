@@ -55,6 +55,7 @@
 
       <details id="details-panel" class="details-panel"><summary><span>Details</span><span class="details-hint">Activity, news and configuration</span><span class="chevron" aria-hidden="true"></span></summary><div class="details-content">
         <section class="detail-section"><div class="section-heading"><h3>Latest decisions</h3><button id="step-bot" class="button small-button">Run one cycle</button></div><div id="decision-feed" class="decision-feed"></div></section>
+        <section class="detail-section"><div class="section-heading"><h3>Operational events</h3></div><div id="event-feed" class="decision-feed"></div></section>
         <section class="detail-section"><div class="section-heading"><h3>Order history</h3><span id="order-count" class="small muted">0 orders</span></div><div class="table-scroll"><table class="ledger-table"><thead><tr><th>Time</th><th>Side / pair</th><th class="numeric">Requested</th><th class="numeric">Filled</th><th class="numeric">Limit price</th><th>Status</th></tr></thead><tbody id="ledger-body"></tbody></table></div><p id="ledger-empty" class="detail-empty">No orders recorded.</p></section>
         <section class="detail-section"><div class="section-heading"><h3>News</h3><button id="refresh-news" class="button small-button">Refresh news</button></div><p id="news-source-status" class="detail-note">No source connected.</p><div id="news-grid" class="news-list"></div><p id="news-policy-label" class="detail-note">News is context only; decisions use strategy rules.</p></section>
         <section class="detail-section"><div class="section-heading"><h3>Configuration</h3><button id="settings-edit" class="text-button">Settings</button></div><dl id="config-summary" class="config-summary"></dl></section>
@@ -76,6 +77,8 @@
       <label>Maximum order (quote currency)<input name="max_order_notional" type="number" min="5" step="0.01" value="75" required></label>
       <label>Position size (%)<input name="position_fraction" type="number" min="1" max="100" step="0.1" value="25" required><span class="field-help">Share of available cash per entry</span></label>
       <label>Drawdown limit (%)<input name="max_drawdown" type="number" min="0.1" max="100" step="0.1" value="10" required><span class="field-help">Decline from peak account equity</span></label>
+      <label>Simulated fee per fill (%)<input name="fee" type="number" min="0" max="9.99" step="0.01" value="0.1" required></label>
+      <label>Assumed slippage per fill (%)<input name="slippage" type="number" min="0" max="9.99" step="0.01" value="0.05" required><span class="field-help">Applied against each simulated buy and sell</span></label>
       <label class="full-field">News policy<select name="news_policy"><option value="observe">Observe only</option><option value="require-fresh">Require fresh news before entry</option></select></label>
       <label class="full-field">Strategy parameters (JSON)<textarea name="params" rows="3" spellcheck="false">{"entry_period": 120, "exit_period": 60}</textarea><span class="field-help">Periods count candles, not days.</span></label>
     </div>

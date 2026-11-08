@@ -288,6 +288,7 @@ function render(data) {
   renderChart(data.equity || []);
   renderOrders(data.orders || [], data.metrics || {});
   renderDecisions(data.decisions || []);
+  renderEvents(data.events || []);
   renderNews(data.news || [], data.news_source || {}, config.news_policy);
   renderConfig(config, data.readiness, status);
 }
@@ -363,6 +364,16 @@ function renderDecisions(items) {
   }));
 }
 
+function renderEvents(items) {
+  $("event-feed").replaceChildren(...(items.length ? items.slice(0, 20).map((item) => {
+    const row = element("article", "decision-item");
+    row.append(element("time", "", timestamp(item.at_ms, true)),
+      element("span", "decision-action", item.kind === "recovered" ? "RESOLVED" : "ERROR"),
+      element("p", "", reason(item.detail?.code || item.detail?.previous_error || item.kind)));
+    return row;
+  }) : [element("p", "detail-empty", "No operational errors recorded.")]));
+}
+
 function renderNews(items, source, policy) {
   $("news-source-status").textContent = !source.configured ? "No RSS or Apify source connected." : source.error ? "Feed error: " + source.error : source.last_success_ms ? "Last successful refresh " + age(source.last_success_ms) + "." : "Feed configured; not refreshed yet.";
   $("news-policy-label").textContent = policy === "require-fresh" ? "Fresh news is required before an entry. The strategy uses rules, not an AI decision model." : "News is context only. The strategy uses rules, not an AI decision model.";
@@ -383,6 +394,10 @@ function renderConfig(config, readiness, status) {
     ["Maximum order", money(config.max_order_notional)],
     ["Cash per entry", percent(Number(config.position_fraction) * 100)],
     ["Drawdown limit", percent(Number(config.max_drawdown) * 100)],
+    ["Simulated fee per fill", percent(Number(config.fee ?? .001) * 100)],
+    ["Assumed slippage per fill", percent(Number(config.slippage ?? 0) * 100)],
+    ["Fees charged", money(snapshot.metrics?.fees_paid ?? 0)],
+    ["Modeled slippage cost", money(snapshot.metrics?.slippage_paid ?? 0)],
     ["Last worker heartbeat", status.heartbeat_ms ? age(status.heartbeat_ms) : "Not recorded"],
     ["Pipeline", readiness ? readiness.ready ? "Ready · simulation only" : (readiness.blocking_reasons || []).map(reason).join(" ") || "Not ready" : "Readiness not reported"],
   ];
@@ -407,13 +422,13 @@ async function control(action) {
 function openSettings() {
   if (pendingRequests.size) return;
   const form = $("config-form"), config = snapshot?.config || {};
-  const defaults = { source: "demo", symbol: "BTC/EUR", timeframe: "4h", strategy: "donchian_breakout", starting_cash: 300, max_order_notional: 75, position_fraction: .25, max_drawdown: .1, news_policy: "observe" };
+  const defaults = { source: "demo", symbol: "BTC/EUR", timeframe: "4h", strategy: "donchian_breakout", starting_cash: 300, max_order_notional: 75, position_fraction: .25, max_drawdown: .1, news_policy: "observe", fee: .001, slippage: 0 };
   for (const [key, fallback] of Object.entries(defaults)) {
     const input = form.elements[key], value = config[key] ?? fallback;
     if (input.tagName === "SELECT" && !Array.from(input.options).some((item) => item.value === String(value))) {
       const option = element("option", "", String(value)); option.value = String(value); input.append(option);
     }
-    input.value = ["position_fraction", "max_drawdown"].includes(key) ? Math.round(Number(value) * 10000) / 100 : value;
+    input.value = ["position_fraction", "max_drawdown", "fee", "slippage"].includes(key) ? Math.round(Number(value) * 10000) / 100 : value;
   }
   form.elements.params.value = JSON.stringify(config.params || STRATEGIES[form.elements.strategy.value]?.params || {}, null, 2);
   $("config-error").textContent = "";
@@ -451,7 +466,7 @@ $("config-form").addEventListener("submit", async (event) => {
   catch (error) { $("config-error").textContent = "Invalid strategy parameters. " + error.message; return; }
   const body = { params };
   for (const key of ["source", "symbol", "timeframe", "strategy", "news_policy"]) body[key] = form.elements[key].value;
-  for (const key of ["starting_cash", "max_order_notional", "position_fraction", "max_drawdown"]) body[key] = Number(form.elements[key].value) / (["position_fraction", "max_drawdown"].includes(key) ? 100 : 1);
+  for (const key of ["starting_cash", "max_order_notional", "position_fraction", "max_drawdown", "fee", "slippage"]) body[key] = Number(form.elements[key].value) / (["position_fraction", "max_drawdown", "fee", "slippage"].includes(key) ? 100 : 1);
   const request = beginRequest("config");
   if (!request) return;
   // Release the modal's focus trap while the server is busy so the operator
