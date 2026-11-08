@@ -68,11 +68,15 @@ class TradingMemory:
         self.connection.close()
 
     @contextmanager
-    def transaction(self):
-        """Take the SQLite write lock and commit all changes atomically."""
+    def transaction(self, *, write=True):
+        """Commit a write atomically, or hold a consistent deferred read view.
+
+        Readers use BEGIN, not BEGIN IMMEDIATE: WAL writers can continue while
+        a multi-query snapshot observes one committed database version.
+        """
         if self.connection.in_transaction:
             raise ValueError("Nested memory transactions are not supported")
-        self.connection.execute("BEGIN IMMEDIATE")
+        self.connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
         try:
             yield self
         except BaseException:

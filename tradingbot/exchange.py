@@ -8,7 +8,9 @@ in some regions where api.binance.com is geo-blocked), then falls back.
 from __future__ import annotations
 
 import json
+import math
 import time
+from dataclasses import dataclass
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +25,14 @@ BASE_URLS = [
 USER_AGENT = "tradingbot/0.1 (educational; github.com/juresavron/tradingbot)"
 
 
+@dataclass(frozen=True)
+class MarketQuote:
+    price: float
+    event_ms: int
+    received_ms: int
+    source: str = "binance-aggregate-trade"
+
+
 def normalize_symbol(symbol: str) -> str:
     return symbol.replace("/", "").replace("-", "").upper()
 
@@ -30,19 +40,29 @@ def normalize_symbol(symbol: str) -> str:
 class MarketData:
     """Minimal REST client for public candle and price data."""
 
-    def __init__(self, base_urls: list[str] | None = None, timeout: float = 15.0):
+    def __init__(self, base_urls: list[str] | None = None, timeout: float = 15.0, budget_seconds: float | None = None):
         self.base_urls = list(base_urls or BASE_URLS)
         self.timeout = timeout
+        self.budget_seconds = budget_seconds
 
     def _get(self, path: str, params: dict) -> object:
         query = urllib.parse.urlencode(params)
         last_error: Exception | None = None
+        deadline = time.monotonic() + (self.budget_seconds or self.timeout * len(self.base_urls))
         for base in self.base_urls:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             url = f"{base}{path}?{query}"
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as resp:
-                    data = json.loads(resp.read().decode())
+                with urllib.request.urlopen(request, timeout=min(self.timeout, remaining)) as resp:
+                    raw = resp.read(4_000_001)
+                    if len(raw) > 4_000_000:
+                        raise ValueError("Market response is too large")
+                    data = json.loads(raw.decode())
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Market request exceeded its budget")
                 # Remember the base that worked so later calls skip dead hosts.
                 if base != self.base_urls[0]:
                     self.base_urls.remove(base)
@@ -96,6 +116,26 @@ class MarketData:
     def get_price(self, symbol: str) -> float:
         data = self._get("/api/v3/ticker/price", {"symbol": normalize_symbol(symbol)})
         return float(data["price"])
+
+    def get_quote(self, symbol: str) -> MarketQuote:
+        """A recent aggregate trade carries an exchange event timestamp.
+
+        This is a last-trade observation, not an executable bid/ask quote.
+        The automation separately enforces event age and receipt age.
+        """
+        data = self._get("/api/v3/aggTrades", {"symbol": normalize_symbol(symbol), "limit": 1})
+        if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+            raise ValueError("market_quote_invalid")
+        trade = data[0]
+        if isinstance(trade.get("p"), bool):
+            raise ValueError("market_quote_invalid")
+        try:
+            price, event_ms = float(trade["p"]), trade["T"]
+        except (KeyError, ValueError, TypeError):
+            raise ValueError("market_quote_invalid") from None
+        if not math.isfinite(price) or price <= 0 or type(event_ms) is not int or event_ms <= 0:
+            raise ValueError("market_quote_invalid")
+        return MarketQuote(price, event_ms, int(time.time() * 1000))
 
 
 def fetch_history(

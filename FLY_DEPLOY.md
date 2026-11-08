@@ -13,17 +13,17 @@ a paid machine/volume, authenticating with Fly, and verifying the deployed
 service are separate steps. Do not interpret local tests as a completed Fly
 deployment.
 
-Current preparation (8 November 2026): the container builds and passes authenticated
-desktop/mobile, background simulated buy/sell, non-root UID, and persistent restart
-checks. Fly CLI 0.5.5 is installed from a checksum-verified official release.
-`fly.toml` proposes `juresavron-tradingbot` and its matching HTTPS origin; the
-name's availability and ownership have not been checked with Fly. No app,
-machine or volume has been created from this environment.
+Deployment checkpoint (8 November 2026): `juresavron-tradingbot` is deployed at
+https://juresavron-tradingbot.fly.dev. One Frankfurt machine uses one shared CPU,
+512 MB memory and the encrypted 1 GB `tradingbot_data` volume. The server runs as
+UID/GID 10001. Verify the live revision label, machine, volume and health before
+each release; this checkpoint does not identify a future deployed code version.
 
-The running cloud policy rejects `api.fly.io` with proxy CONNECT 403, and the
-CLI has no account credential. The saved network draft includes the required
-Fly endpoints, but is not applied. Provider-side validation and a public health
-check remain pending. Do not describe this state as a deployed application.
+The active trial uses public BTC/EUR data, 4-hour Donchian 120/60 targets,
+EUR300 virtual cash, a EUR75 order cap, 25% of cash per entry, a 10% account
+drawdown limit, 0.1% modeled fees and 0.05% adverse slippage. News is observe-only.
+Existing settings and wallet history must survive releases. See
+[AUDIT_REPAIRS.md](AUDIT_REPAIRS.md) for the recovery/data contracts and tests.
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ check remain pending. Do not describe this state as a deployed application.
 - `flyctl`, authenticated using `fly auth login`.
 - A globally unique app name chosen by the operator.
 
-The proposed name is `juresavron-tradingbot`. Deployment must inspect the
+The existing name is `juresavron-tradingbot`. Deployment must inspect the
 authenticated account and provider state before creating or modifying it.
 Changing the name also requires changing `PUBLIC_ORIGIN` and the exact public
 hostname allowed for verification.
@@ -44,15 +44,13 @@ verify the downloaded artifact against that release's published checksum
 file, and install it into a user-owned binary directory. Do not install an
 unverified third-party binary or disable HTTPS verification.
 
-### Connect this managed cloud environment
+### Connect the deployment environment
 
 The required public destinations are `api.fly.io` (control API),
 `api.machines.dev` (Machines/apps/volumes API), `registry.fly.io` (image registry),
-`fly.io` (browser login), and `juresavron-tradingbot.fly.dev` (planned app checks).
-The current draft preserves the existing Binance/Apify domains and adds the
-missing Machines, browser-login and planned-app domains. Review/save it in
-Environment Settings, then publish as requested by the saved-draft result.
-Recheck actual runtime access after applying it.
+`fly.io` (browser login), and `juresavron-tradingbot.fly.dev` (app checks).
+Verify access from the actual environment being used. Earlier cloud-network
+drafts and old missing-credential errors are not the current deployment status.
 
 Use interactive browser login for Fly. The older, unbound `FLY_API_TOKEN`
 network-secret requirement should be removed in settings for this workflow;
@@ -74,9 +72,11 @@ directory for subsequent commands and leave conflicting proxy-token environment
 overrides unset in that command context. Never print/copy its access token into
 chat, source, logs or deployment arguments.
 
-Build locally to avoid remote-builder/WireGuard dependencies. Keep the configured
-proxy/CA trust and use the local Docker daemon. Do not disable TLS, add network
-fallbacks, or spin up a remote builder simply to work around blocked access.
+Use the existing Fly Depot build workflow when no local Docker daemon is
+available, or explicitly select `--local-only` with a working local daemon.
+Build and push the image before pausing the trial. Keep TLS verification enabled
+and record the source revision label and resulting image digest. Building an
+image alone does not deploy it or change the current paper trial.
 
 ## Prepare the app and one persistent volume
 
@@ -164,7 +164,7 @@ validation. Do not loosen the origin check to `*` to resolve a mismatch.
 
 ```bash
 fly config validate --app "$TRADINGBOT_FLY_APP"
-fly deploy --app "$TRADINGBOT_FLY_APP" --local-only --strategy immediate --ha=false
+fly deploy --app "$TRADINGBOT_FLY_APP" --remote-only --depot=true --strategy immediate --ha=false
 fly status --app "$TRADINGBOT_FLY_APP"
 fly checks list --app "$TRADINGBOT_FLY_APP"
 fly logs --app "$TRADINGBOT_FLY_APP"
@@ -201,8 +201,29 @@ Then open the HTTPS app, sign in, confirm simulation/demo labeling and paused
 automation, start a short demo run, inspect decisions and simulated fills,
 pause it, and verify a controlled machine restart preserves account memory.
 Confirm unauthenticated access cannot read or change the protected dashboard
-API. Health alone establishes service readiness, not trading profitability,
+API. Health alone establishes process liveness, not operational readiness,
 market-data access, or a successful exchange order.
+
+Check `/readyz` separately after a fresh worker observation. It distinguishes
+quote receipt freshness from the exchange trade's event age. A live-price
+observation needs a known, recent exchange timestamp; an unknown timestamp
+cannot make readiness true or authorize a new entry. Inspect authenticated
+state to verify the account ID, revision, configuration and balances match the
+pre-release checkpoint before restoring the prior entry permission.
+
+### Fly login identity boundary
+
+`TRADINGBOT_FLY_PROXY=1` is enabled only for this Fly deployment. The CLI enforces
+an IPv4-only `0.0.0.0` listener. Public traffic reaches the app through Fly's HTTP
+handler, which supplies `Fly-Client-IP`; direct IPv6 6PN traffic cannot reach the
+listener. The app also requires Fly environment identity, HTTPS, a private IPv4
+peer and one valid IP header. Other deployments ignore forwarding headers.
+Never enable this mode behind an untrusted IPv4 hop or change the listener to
+`[::]`. `X-Forwarded-For` is not used for login identity.
+
+Password checks run outside the session lock, with at most two concurrent checks.
+Rate reservations are made before hashing, failed attempts survive concurrent
+successes, and existing authenticated controls do not wait for password work.
 
 No paid news actor is launched by deployment. Real publisher feeds, Apify
 dataset access, and Binance Testnet require their own configuration and live

@@ -13,6 +13,7 @@ from unittest.mock import patch
 from tradingbot.automation import AutomationRuntime
 from tradingbot.candles import Candle, TIMEFRAME_MS
 from tradingbot.execution import ExecutionEngine
+from tradingbot.exchange import MarketQuote
 from tradingbot.memory import TradingMemory
 from tradingbot.orders import BrokerUnavailable
 from tradingbot.simulated_broker import SimulatedBroker
@@ -367,7 +368,7 @@ class TestAutomationRuntime(unittest.TestCase):
         self.runtime.control("start")
         now_ms = int(time.time() * 1000)
         with patch("tradingbot.automation.MarketData.get_candles", return_value=self.market_bars(now_ms)), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=101), \
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, now_ms, now_ms)), \
                 patch("tradingbot.automation.ExecutionEngine.submit", side_effect=BrokerUnavailable("interrupted before submission")):
             prepared = self.runtime.tick_once(now_ms=now_ms)
         self.assertEqual(prepared["orders"][0]["status"], "PREPARED")
@@ -376,7 +377,7 @@ class TestAutomationRuntime(unittest.TestCase):
         self.runtime = AutomationRuntime(self.path, start_worker=False)
         later = now_ms + 5 * TIMEFRAME_MS["4h"]
         with patch("tradingbot.automation.SimulatedBroker.place_order", side_effect=AssertionError("old plan must not be submitted")), \
-                patch("tradingbot.automation.MarketData.get_price", side_effect=RuntimeError("public feed offline")) as get_price:
+                patch("tradingbot.automation.MarketData.get_quote", side_effect=RuntimeError("public feed offline")) as get_price:
             recovered = self.runtime.tick_once(now_ms=later)
             get_price.assert_not_called()
             unavailable = self.runtime.tick_once(now_ms=later + 1000)
@@ -397,7 +398,7 @@ class TestAutomationRuntime(unittest.TestCase):
                    "body": "An observation, not an order instruction.", "source": "example.com",
                    "published_at_ms": now_ms - 1000, "observed_at_ms": now_ms - 1000, "assets": ["BTC"]}
         with patch("tradingbot.automation.MarketData.get_candles", return_value=bars), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=101), \
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, now_ms, now_ms)), \
                 patch("tradingbot.automation.TradingMemory.recent_news", return_value=[article]), \
                 patch("tradingbot.automation.ExecutionEngine.submit", side_effect=BrokerUnavailable("interrupted before submission")):
             prepared = self.runtime.tick_once(now_ms=now_ms)
@@ -411,7 +412,7 @@ class TestAutomationRuntime(unittest.TestCase):
         while extended[-1].ts + interval < later_end:
             extended.append(Candle(extended[-1].ts + interval, 101, 101, 101, 101, 1))
         with patch("tradingbot.automation.MarketData.get_candles", return_value=extended[-300:]), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=101), \
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, later, later)), \
                 patch("tradingbot.automation.TradingMemory.recent_news", return_value=[]), \
                 patch("tradingbot.automation.SimulatedBroker.place_order", side_effect=AssertionError("expired approval must not cause an order")):
             recovered = self.runtime.tick_once(now_ms=later)
@@ -570,7 +571,7 @@ class TestAutomationRuntime(unittest.TestCase):
         # A fresh ticker must not make that older strategy signal current.
         bars = self.bullish_bars_through(receipt - 6 * 60 * 60 * 1000 - interval)
         with patch("tradingbot.automation.MarketData.get_candles", return_value=bars), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=150):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(150, receipt, receipt)):
             self.runtime.control("start")
             state = self.runtime.tick_once(now_ms=receipt)
         self.assertEqual(state["status"]["error"], "market_data_stale")
@@ -590,7 +591,7 @@ class TestAutomationRuntime(unittest.TestCase):
                     runtime.configure({"source": "binance", "strategy": "sma_cross", "params": {"fast": 2, "slow": 4}})
                     runtime.control("start")
                     with patch("tradingbot.automation.MarketData.get_candles", return_value=bars), \
-                            patch("tradingbot.automation.MarketData.get_price", return_value=150):
+                            patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(150, boundary + delay_ms, boundary + delay_ms)):
                         state = runtime.tick_once(now_ms=boundary + delay_ms)
                     if accepted:
                         self.assertIsNone(state["status"]["error"])
@@ -607,7 +608,7 @@ class TestAutomationRuntime(unittest.TestCase):
         interval = TIMEFRAME_MS["4h"]
         bars = self.bullish_bars_through(boundary - 3 * interval)
         with patch("tradingbot.automation.MarketData.get_candles", return_value=bars), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=150):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(150, boundary + 30_000, boundary + 30_000)):
             self.runtime.control("start")
             state = self.runtime.tick_once(now_ms=boundary + 30_000)
         self.assertEqual(state["status"]["error"], "market_data_stale")
@@ -621,7 +622,7 @@ class TestAutomationRuntime(unittest.TestCase):
                 for i, p in enumerate(prices)]
         self.runtime.control("start")
         with patch("tradingbot.automation.MarketData.get_candles", return_value=bars), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=150):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(150, boundary + 10_000, boundary + 10_000)):
             state = self.runtime.tick_once(now_ms=boundary + 10_000)
         self.assertEqual(state["metrics"]["n_orders"], 0)
         self.assertEqual(state["status"]["error"], "market_data_stale")
@@ -632,7 +633,7 @@ class TestAutomationRuntime(unittest.TestCase):
         self.configure_fast(source="binance")
         now_ms = int(time.time() * 1000)
         with patch("tradingbot.automation.MarketData.get_candles", return_value=self.market_bars(now_ms)), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=101):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, now_ms, now_ms)):
             self.runtime.control("start")
             state = self.runtime.tick_once(now_ms=now_ms)
         self.assertEqual(state["status"]["source"], "binance")
@@ -653,7 +654,7 @@ class TestAutomationRuntime(unittest.TestCase):
                 })
         self.runtime.control("start")
         with patch("tradingbot.automation.MarketData.get_candles", return_value=self.market_bars(now_ms)), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=101):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, now_ms, now_ms)):
             state = self.runtime.tick_once(now_ms=now_ms)
         self.assertEqual(state["metrics"]["n_filled"], 1)
         self.assertEqual(len(state["news"]), 50)
@@ -664,7 +665,7 @@ class TestAutomationRuntime(unittest.TestCase):
         self.configure_fast(source="binance")
         now_ms = int(time.time() * 1000)
         with patch("tradingbot.automation.MarketData.get_candles", return_value=self.market_bars(now_ms)), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=101):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, now_ms, now_ms)):
             self.runtime.control("start")
             first = self.runtime.tick_once(now_ms=now_ms)
             repeated = self.runtime.tick_once(now_ms=now_ms + 1000)
@@ -684,7 +685,7 @@ class TestAutomationRuntime(unittest.TestCase):
 
         def tick(end):
             with patch("tradingbot.automation.MarketData.get_candles", return_value=bars[:end]), \
-                    patch("tradingbot.automation.MarketData.get_price", return_value=prices[end - 1]):
+                    patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(prices[end - 1], bars[end - 1].ts + interval, bars[end - 1].ts + interval)):
                 return self.runtime.tick_once(now_ms=bars[end - 1].ts + interval)
 
         for end in range(300, 305):
@@ -713,14 +714,14 @@ class TestAutomationRuntime(unittest.TestCase):
         now_ms = int(time.time() * 1000)
         bars = self.market_bars(now_ms)
         with patch("tradingbot.automation.MarketData.get_candles", return_value=bars), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=101):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, now_ms, now_ms)):
             self.runtime.control("start")
             entered = self.runtime.tick_once(now_ms=now_ms)
         self.assertGreater(entered["portfolio"]["quantity"], 0)
         interval = TIMEFRAME_MS["4h"]
         stale = [Candle(c.ts - 4 * interval, c.open, c.high, c.low, c.close, c.volume) for c in bars]
         with patch("tradingbot.automation.MarketData.get_candles", return_value=stale), \
-                patch("tradingbot.automation.MarketData.get_price", return_value=50):
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(50, now_ms + 1000, now_ms + 1000)):
             halted = self.runtime.tick_once(now_ms=now_ms + 1000)
         self.assertEqual(halted["status"]["state"], "halted")
         self.assertFalse(halted["status"]["running"])
@@ -741,13 +742,14 @@ class TestAutomationRuntime(unittest.TestCase):
             with self.subTest(price=price, last_timestamp=candles[-1].ts):
                 self.runtime.control("start")
                 with patch("tradingbot.automation.MarketData.get_candles", return_value=candles), \
-                        patch("tradingbot.automation.MarketData.get_price", return_value=price):
+                        patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(price, now_ms, now_ms)):
                     state = self.runtime.tick_once(now_ms=now_ms)
                 self.assertTrue(state["status"]["error"])
                 self.assertEqual(state["metrics"]["n_orders"], 0)
                 json.dumps(state, allow_nan=False)
         self.runtime.control("start")
-        with patch("tradingbot.automation.MarketData.get_candles", side_effect=RuntimeError("https://secret.invalid?token=hidden")):
+        with patch("tradingbot.automation.MarketData.get_candles", side_effect=RuntimeError("https://secret.invalid?token=hidden")), \
+                patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(101, now_ms, now_ms)):
             state = self.runtime.tick_once(now_ms=now_ms)
         self.assertTrue(state["status"]["error"])
         self.assertNotIn("secret.invalid", state["status"]["error"])
