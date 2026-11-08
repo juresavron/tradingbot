@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
+from collections import deque
 
 from .candles import Candle
 from .indicators import rsi, sma
@@ -99,10 +100,59 @@ class BuyHold(Strategy):
         return [1] * len(candles)
 
 
+class DonchianBreakout(Strategy):
+    """Trend candidate: enter above prior highs, exit below prior lows.
+
+    Separate entry and exit windows keep the position through smaller price
+    reversals. Periods count candles: the defaults span 20 and 10 days on 4h
+    data. These are research defaults, not evidence of a profitable strategy.
+    """
+
+    name = "donchian_breakout"
+
+    def __init__(self, entry_period: int = 120, exit_period: int = 60):
+        for name, value in (("entry_period", entry_period), ("exit_period", exit_period)):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if exit_period >= entry_period:
+            raise ValueError("exit_period must be < entry_period")
+        self.entry_period = entry_period
+        self.exit_period = exit_period
+
+    def signals(self, candles: list[Candle]) -> list[int]:
+        # Deques hold extrema of the previous windows only. Add this candle
+        # after deciding, so its own high/low cannot set its breakout level.
+        highs: deque[int] = deque()
+        lows: deque[int] = deque()
+        position = 0
+        out = []
+        for i, candle in enumerate(candles):
+            while highs and highs[0] < i - self.entry_period:
+                highs.popleft()
+            while lows and lows[0] < i - self.exit_period:
+                lows.popleft()
+
+            if i >= self.entry_period:
+                if position == 0 and candle.close > candles[highs[0]].high:
+                    position = 1
+                elif position == 1 and candle.close < candles[lows[0]].low:
+                    position = 0
+            out.append(position)
+
+            while highs and candles[highs[-1]].high <= candle.high:
+                highs.pop()
+            highs.append(i)
+            while lows and candles[lows[-1]].low >= candle.low:
+                lows.pop()
+            lows.append(i)
+        return out
+
+
 STRATEGIES: dict[str, type[Strategy]] = {
     SmaCross.name: SmaCross,
     RsiRevert.name: RsiRevert,
     BuyHold.name: BuyHold,
+    DonchianBreakout.name: DonchianBreakout,
 }
 
 

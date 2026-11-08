@@ -1,0 +1,86 @@
+{
+  "$schema": "https://schema.freqtrade.io/schema.json",
+  "bot_name": "donchian-comparison-paper",
+  "strategy": "DonchianBaseline",
+  "strategy_path": "experiments/freqtrade_compare/strategies",
+  "user_data_dir": "experiments/freqtrade_compare",
+  "db_url": "sqlite:///experiments/freqtrade_compare/freqtrade.dryrun.sqlite",
+  "dry_run": true,
+  "dry_run_wallet": 300,
+  "trading_mode": "spot",
+  "margin_mode": "",
+  "stake_currency": "EUR",
+  "fiat_display_currency": "EUR",
+  "stake_amount": 75,
+  "max_open_trades": 1,
+  "tradable_balance_ratio": 0.99,
+  "amend_last_stake_amount": false,
+  "timeframe": "4h",
+  "process_only_new_candles": true,
+  "fee": 0.001,
+  "position_adjustment_enable": false,
+  "trailing_stop": false,
+  "use_exit_signal": true,
+  "exit_profit_only": false,
+  "ignore_roi_if_entry_signal": false,
+  "cancel_open_orders_on_exit": true,
+  "force_entry_enable": false,
+  "initial_state": "running",
+  "order_types": {
+    "entry": "market",
+    "exit": "market",
+    "emergency_exit": "market",
+    "force_entry": "market",
+    "force_exit": "market",
+    "stoploss": "market",
+    "stoploss_on_exchange": false
+  },
+  "order_time_in_force": {
+    "entry": "GTC",
+    "exit": "GTC"
+  },
+  "unfilledtimeout": {
+    "entry": 10,
+    "exit": 10,
+    "exit_timeout_count": 0,
+    "unit": "minutes"
+  },
+  "entry_pricing": {
+    "price_side": "other",
+    "use_order_book": true,
+    "order_book_top": 1,
+    "price_last_balance": 0.0,
+    "check_depth_of_market": {
+      "enabled": false,
+      "bids_to_ask_delta": 1
+    }
+  },
+  "exit_pricing": {
+    "price_side": "other",
+    "use_order_book": true,
+    "order_book_top": 1
+  },
+  "exchange": {
+    "name": "binance",
+    "pair_whitelist": ["BTC/EUR"],
+    "pair_blacklist": [],
+    "ccxt_config": {
+      "enableRateLimit": true,
+      "options": {
+        "defaultType": "spot",
+        "fetchMarkets": {"types": ["spot"]}
+      }
+    },
+    "ccxt_async_config": {
+      "enableRateLimit": true,
+      "options": {
+        "defaultType": "spot",
+        "fetchMarkets": {"types": ["spot"]}
+      }
+    }
+  },
+  "pairlists": [{"method": "StaticPairList"}],
+  "dataformat_ohlcv": "feather",
+  "dataformat_trades": "feather",
+  "internals": {"process_throttle_secs": 5}
+}

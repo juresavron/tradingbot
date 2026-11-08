@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 from tradingbot.backtest import max_drawdown, run_backtest
 from tradingbot.candles import Candle
@@ -27,6 +28,80 @@ class SignalAt(Strategy):
             on = i >= self.enter and (self.exit is None or i < self.exit)
             out.append(1 if on else 0)
         return out
+
+
+class FixedSignals(Strategy):
+    def __init__(self, values):
+        self.values = values
+
+    def signals(self, candles):
+        return self.values
+
+
+class TestInputValidation(unittest.TestCase):
+    def test_rejects_invalid_account_and_cost_parameters(self):
+        cases = {
+            "starting_cash": [0.0, -100.0, float("nan"), float("inf")],
+            "fee": [-0.01, 1.0, float("nan"), float("inf")],
+            "slippage": [-0.01, 1.0, float("nan"), float("inf")],
+            "size": [0.0, -0.1, 1.1, float("nan"), float("inf")],
+            "stop_pct": [0.0, -0.1, 1.0, float("nan"), float("inf")],
+        }
+        for name, values in cases.items():
+            for value in values:
+                with self.subTest(parameter=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        run_backtest(flat_candles(10), BuyHold(), **{name: value})
+
+    def test_rejects_nonfinite_or_nonpositive_prices(self):
+        for field in ("open", "high", "low", "close"):
+            for value in (0.0, -1.0, float("nan"), float("inf")):
+                with self.subTest(field=field, value=value):
+                    candles = flat_candles(10)
+                    candles[5] = replace(candles[5], **{field: value})
+                    with self.assertRaisesRegex(ValueError, "OHLC"):
+                        run_backtest(candles, BuyHold())
+
+    def test_rejects_invalid_candle_ranges_and_volumes(self):
+        for changes, message in [
+            ({"open": 101.0}, "low/high"),
+            ({"close": 99.0}, "low/high"),
+            ({"low": 101.0}, "low/high"),
+            ({"high": 99.0}, "low/high"),
+            ({"volume": -1.0}, "volume"),
+            ({"volume": float("nan")}, "volume"),
+            ({"volume": float("inf")}, "volume"),
+        ]:
+            with self.subTest(changes=changes):
+                candles = flat_candles(10)
+                candles[5] = replace(candles[5], **changes)
+                with self.assertRaisesRegex(ValueError, message):
+                    run_backtest(candles, BuyHold())
+
+    def test_rejects_duplicates_gaps_unsorted_and_nonfinite_timestamps(self):
+        for timestamp in (4 * HOUR, 6 * HOUR, 3 * HOUR, float("nan"), float("inf")):
+            with self.subTest(timestamp=timestamp):
+                candles = flat_candles(10)
+                candles[5] = replace(candles[5], ts=timestamp)
+                with self.assertRaisesRegex(ValueError, "timestamp"):
+                    run_backtest(candles, BuyHold())
+
+    def test_rejects_unknown_or_mismatched_timeframe(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported timeframe"):
+            run_backtest(flat_candles(10), BuyHold(), timeframe="2h")
+        with self.assertRaisesRegex(ValueError, "4h interval"):
+            run_backtest(flat_candles(10), BuyHold(), timeframe="4h")
+
+    def test_accepts_matching_timeframe_and_zero_volume(self):
+        candles = [replace(c, ts=i * 4 * HOUR, volume=0.0) for i, c in enumerate(flat_candles(10))]
+        result = run_backtest(candles, BuyHold(), timeframe="4h", fee=0.0, slippage=0.0)
+        self.assertAlmostEqual(result.metrics["final_equity"], 100.0)
+
+    def test_rejects_missing_extra_and_nonbinary_signals(self):
+        for signals in ([0] * 9, [0] * 11, [0] * 9 + [2], [0] * 9 + [-1], [0] * 9 + [float("nan")]):
+            with self.subTest(signals=signals):
+                with self.assertRaisesRegex(ValueError, "one binary signal"):
+                    run_backtest(flat_candles(10), FixedSignals(signals))
 
 
 class TestNoLookahead(unittest.TestCase):
@@ -94,6 +169,31 @@ class TestMaxDrawdown(unittest.TestCase):
 
     def test_monotonic_rise_has_zero_drawdown(self):
         self.assertEqual(max_drawdown([1, 2, 3, 4]), 0.0)
+
+    def test_benchmark_drawdown_includes_final_liquidation_costs(self):
+        result = run_backtest(flat_candles(10), BuyHold(), fee=0.01, slippage=0.005)
+        m = result.metrics
+        self.assertAlmostEqual(m["max_drawdown_pct"], -m["total_return_pct"])
+        self.assertAlmostEqual(m["bh_max_drawdown_pct"], m["max_drawdown_pct"])
+
+
+class TestAnnualization(unittest.TestCase):
+    def test_short_history_annualization_overflow_is_a_clear_error(self):
+        candles = []
+        for i in range(100):
+            price = 100 * 1.005 ** i
+            candles.append(Candle(i * 60_000, price, price, price, price, 1))
+        with self.assertRaisesRegex(ValueError, "CAGR cannot be represented.*longer history"):
+            run_backtest(candles, BuyHold(), timeframe="1m", fee=0.0, slippage=0.0)
+
+    def test_nonfinite_cagr_percentage_is_rejected(self):
+        # The exponentiation itself fits in a float, but multiplying by 100
+        # to express the CAGR as a percentage would silently produce infinity.
+        last_price = 100 * 1e307 ** (2 / 365)
+        prices = [100.0, 100.0, last_price]
+        candles = [Candle(i * 24 * HOUR, price, price, price, price, 1) for i, price in enumerate(prices)]
+        with self.assertRaisesRegex(ValueError, "CAGR cannot be represented.*longer history"):
+            run_backtest(candles, BuyHold(), timeframe="1d", fee=0.0, slippage=0.0)
 
 
 class TestEndToEnd(unittest.TestCase):

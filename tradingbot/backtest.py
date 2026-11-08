@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from .candles import Candle, bars_per_year
+from .candles import TIMEFRAME_MS, Candle, bars_per_year
 from .strategy import Strategy
 
 
@@ -88,10 +88,35 @@ def run_backtest(
 ) -> BacktestResult:
     if len(candles) < 3:
         raise ValueError("Need at least 3 candles to backtest")
-    if not 0 < size <= 1:
-        raise ValueError("size must be in (0, 1]")
+    if timeframe not in TIMEFRAME_MS:
+        raise ValueError(f"Unsupported timeframe: {timeframe}")
+    if not math.isfinite(starting_cash) or starting_cash <= 0:
+        raise ValueError("starting_cash must be finite and > 0")
+    for name, value in (("fee", fee), ("slippage", slippage)):
+        if not math.isfinite(value) or not 0 <= value < 1:
+            raise ValueError(f"{name} must be finite and in [0, 1)")
+    if not math.isfinite(size) or not 0 < size <= 1:
+        raise ValueError("size must be finite and in (0, 1]")
+    if stop_pct is not None and (not math.isfinite(stop_pct) or not 0 < stop_pct < 1):
+        raise ValueError("stop_pct must be finite and in (0, 1)")
+
+    interval = TIMEFRAME_MS[timeframe]
+    for i, candle in enumerate(candles):
+        prices = (candle.open, candle.high, candle.low, candle.close)
+        if any(not math.isfinite(price) or price <= 0 for price in prices):
+            raise ValueError(f"Candle {i}: OHLC prices must be finite and > 0")
+        if not math.isfinite(candle.volume) or candle.volume < 0:
+            raise ValueError(f"Candle {i}: volume must be finite and >= 0")
+        if not (candle.low <= candle.open <= candle.high and candle.low <= candle.close <= candle.high):
+            raise ValueError(f"Candle {i}: low/high must contain open and close")
+        if not math.isfinite(candle.ts):
+            raise ValueError(f"Candle {i}: timestamp must be finite")
+        if i and candle.ts - candles[i - 1].ts != interval:
+            raise ValueError(f"Candle {i}: timestamps must be strictly spaced at the {timeframe} interval")
 
     signals = strategy.signals(candles)
+    if len(signals) != len(candles) or any(signal not in (0, 1) for signal in signals):
+        raise ValueError("Strategy must return exactly one binary signal (0 or 1) per candle")
     result = BacktestResult(symbol=symbol, timeframe=timeframe, strategy=strategy.describe())
 
     cash = starting_cash
@@ -180,19 +205,25 @@ def run_backtest(
     bh_qty = starting_cash / (bh_fill * (1 + fee))
     bh_curve = [starting_cash] + [bh_qty * c.close for c in candles[1:]]
     bh_final = bh_qty * last.close * (1 - slippage) * (1 - fee)
+    bh_curve[-1] = bh_final
 
     wins = [t for t in result.trades if t.pnl > 0]
     losses = [t for t in result.trades if t.pnl <= 0]
     total_return = final_equity / starting_cash - 1.0
     bh_return = bh_final / starting_cash - 1.0
+    cagr_error = "CAGR cannot be represented for this return and duration; longer history is required"
+    try:
+        cagr_pct = ((final_equity / starting_cash) ** (365.0 / days) - 1.0) * 100 if final_equity > 0 else -100.0
+    except OverflowError as e:
+        raise ValueError(cagr_error) from e
+    if not math.isfinite(cagr_pct):
+        raise ValueError(cagr_error)
 
     result.metrics = {
         "starting_cash": starting_cash,
         "final_equity": final_equity,
         "total_return_pct": total_return * 100,
-        "cagr_pct": ((final_equity / starting_cash) ** (365.0 / days) - 1.0) * 100
-        if final_equity > 0
-        else -100.0,
+        "cagr_pct": cagr_pct,
         "max_drawdown_pct": max_drawdown(equity_values) * 100,
         "sharpe": sharpe_ratio(equity_values, bars_per_year(timeframe)),
         "n_trades": len(result.trades),

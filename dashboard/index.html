@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f7f8f7">
+  <title>Tradingbot</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="boot-screen" class="boot-screen"><p>Connecting to Tradingbot…</p><button id="retry-connection" class="button" hidden>Try again</button></div>
+
+  <main id="login-screen" class="login-screen" hidden>
+    <section class="login-card" aria-labelledby="login-title">
+      <div class="wordmark">Tradingbot<span class="brand-dot" aria-hidden="true"></span></div>
+      <h1 id="login-title">Sign in</h1>
+      <p>Use your server access token.</p>
+      <form id="login-form">
+        <label for="access-token">Access token</label>
+        <input id="access-token" type="password" autocomplete="current-password" required>
+        <p id="login-error" class="form-error" role="alert"></p>
+        <button id="login-submit" class="button primary" type="submit">Sign in</button>
+      </form>
+      <span class="login-note">This dashboard operates a simulated account.</span>
+    </section>
+  </main>
+
+  <div id="app-shell" class="app-shell" hidden>
+    <header class="app-header">
+      <a class="wordmark" href="#">Tradingbot<span class="brand-dot" aria-hidden="true"></span></a>
+      <div class="environment"><span class="mode-label">Simulation</span><span id="source-badge" class="source-label">—</span></div>
+      <div class="header-actions"><button id="new-simulation" class="text-button">Settings</button><span class="header-divider"></span><button id="logout" class="text-button">Sign out</button></div>
+    </header>
+
+    <main class="content">
+      <div id="connection-error" class="notice error-notice" role="alert" hidden></div>
+      <section class="account-section" aria-labelledby="account-heading">
+        <div class="account-topline"><h1 id="account-heading">Your account</h1><span id="account-identity" class="small muted">—</span></div>
+        <div class="account-main">
+          <div class="account-value"><span id="metric-equity">—</span><p><span id="metric-return">—</span><span class="return-label">since simulation start</span></p></div>
+          <div class="bot-controls"><div class="bot-state"><span id="state-dot" class="state-dot"></span><strong id="engine-state">Loading</strong></div><div class="control-buttons"><button id="toggle-bot" class="button primary" data-action="start"><span id="toggle-label">Start bot</span></button><button id="flatten-bot" class="button">Flatten &amp; pause</button></div></div>
+        </div>
+        <div class="account-facts"><span>Cash <strong id="metric-cash">—</strong></span><span>Position <strong id="position-quantity">—</strong><span id="allocation-asset" class="muted">—</span></span><span>Drawdown <strong id="metric-drawdown">—</strong><span id="risk-limit" class="muted">—</span></span></div>
+        <div class="operation-line"><div><span id="engine-strategy">—</span><span class="fact-divider">·</span><span id="worker-health">Checking worker</span></div><span id="market-age">No price observed</span></div>
+        <div id="worker-warning" class="notice warning-notice" role="status" hidden></div>
+        <p id="engine-reason" class="run-note">Waiting for an account snapshot.</p>
+        <p id="source-notice" class="source-notice">All orders use virtual funds.</p>
+      </section>
+
+      <section class="chart-section" aria-labelledby="chart-title"><div class="section-heading"><h2 id="chart-title">Equity</h2><span id="chart-coverage" class="small muted">Recent observations</span></div><div id="equity-chart" class="equity-chart"></div><div class="chart-caption"><span>Marked account value · simulated funds</span><span id="chart-points">No recorded values</span></div></section>
+
+      <section class="trades-section" aria-labelledby="trades-title"><div class="section-heading"><h2 id="trades-title">Recent trades</h2><span class="small muted">Latest 5 fills</span></div><div id="pending-orders" class="notice warning-notice" hidden></div><div class="table-scroll"><table><thead><tr><th>Time</th><th>Trade</th><th class="numeric">Filled quantity</th><th class="numeric">Average price</th><th class="numeric">Value</th></tr></thead><tbody id="orders-body"></tbody></table></div><div id="orders-empty" class="empty-state"><p>No filled trades yet.</p><span>Trades appear here after an order fills.</span></div></section>
+
+      <details id="details-panel" class="details-panel"><summary><span>Details</span><span class="details-hint">Activity, news and configuration</span><span class="chevron" aria-hidden="true"></span></summary><div class="details-content">
+        <section class="detail-section"><div class="section-heading"><h3>Latest decisions</h3><button id="step-bot" class="button small-button">Run one cycle</button></div><div id="decision-feed" class="decision-feed"></div></section>
+        <section class="detail-section"><div class="section-heading"><h3>Order history</h3><span id="order-count" class="small muted">0 orders</span></div><div class="table-scroll"><table class="ledger-table"><thead><tr><th>Time</th><th>Side / pair</th><th class="numeric">Requested</th><th class="numeric">Filled</th><th class="numeric">Limit price</th><th>Status</th></tr></thead><tbody id="ledger-body"></tbody></table></div><p id="ledger-empty" class="detail-empty">No orders recorded.</p></section>
+        <section class="detail-section"><div class="section-heading"><h3>News</h3><button id="refresh-news" class="button small-button">Refresh news</button></div><p id="news-source-status" class="detail-note">No source connected.</p><div id="news-grid" class="news-list"></div><p id="news-policy-label" class="detail-note">News is context only; decisions use strategy rules.</p></section>
+        <section class="detail-section"><div class="section-heading"><h3>Configuration</h3><button id="settings-edit" class="text-button">Settings</button></div><dl id="config-summary" class="config-summary"></dl></section>
+      </div></details>
+      <footer class="app-footer"><span id="connection-label">Connecting</span><span id="last-updated">—</span><span>Simulated results do not establish future profitability.</span></footer>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="config-dialog" aria-labelledby="config-title"><form id="config-form">
+    <div class="dialog-header"><h2 id="config-title">Simulation settings</h2><button type="button" class="close-button" data-close="config-dialog" aria-label="Close settings">×</button></div>
+    <p class="dialog-intro">Saving starts a new simulation. First pause entries and close the current position. Previous account records are retained.</p>
+    <div class="form-grid">
+      <label>Market data<select name="source"><option value="demo">Demo replay</option><option value="binance">Binance public data</option></select></label>
+      <label>Trading pair<select name="symbol"><option value="BTC/EUR">BTC / EUR</option><option value="ETH/EUR">ETH / EUR</option></select></label>
+      <label>Timeframe<select name="timeframe"><option value="4h">4 hours</option><option value="1h">1 hour</option></select></label>
+      <label>Strategy<select name="strategy"><option value="donchian_breakout">Donchian breakout</option><option value="sma_cross">SMA crossover</option><option value="rsi_revert">RSI reversion</option></select></label>
+      <label>Starting cash (quote currency)<input name="starting_cash" type="number" min="5" step="0.01" value="300" required></label>
+      <label>Maximum order (quote currency)<input name="max_order_notional" type="number" min="5" step="0.01" value="75" required></label>
+      <label>Position size (%)<input name="position_fraction" type="number" min="1" max="100" step="0.1" value="25" required><span class="field-help">Share of available cash per entry</span></label>
+      <label>Drawdown limit (%)<input name="max_drawdown" type="number" min="0.1" max="100" step="0.1" value="10" required><span class="field-help">Decline from peak account equity</span></label>
+      <label class="full-field">News policy<select name="news_policy"><option value="observe">Observe only</option><option value="require-fresh">Require fresh news before entry</option></select></label>
+      <label class="full-field">Strategy parameters (JSON)<textarea name="params" rows="3" spellcheck="false">{"entry_period": 120, "exit_period": 60}</textarea><span class="field-help">Periods count candles, not days.</span></label>
+    </div>
+    <p id="config-error" class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button" data-close="config-dialog">Cancel</button><button id="config-submit" type="submit" class="button primary">Start a new simulation</button></div>
+  </form></dialog>
+  <dialog id="flatten-dialog" class="small-dialog" aria-labelledby="flatten-title"><div class="dialog-header"><h2 id="flatten-title">Close position and pause?</h2><button class="close-button" data-close="flatten-dialog" aria-label="Close confirmation">×</button></div><p class="dialog-intro">Request a close of the simulated position and pause new entries. Closing can require multiple cycles or remain blocked if market data is unavailable. Check the remaining position afterward.</p><div class="dialog-actions"><button class="button" data-close="flatten-dialog">Cancel</button><button id="confirm-flatten" class="button primary">Flatten &amp; pause</button></div></dialog>
+  <script src="/app.js" defer></script>
+</body>
+</html>

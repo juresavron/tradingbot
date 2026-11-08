@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -12,9 +14,12 @@ from .candles import TIMEFRAME_MS, load_csv, save_csv
 from .exchange import MarketData, fetch_history, normalize_symbol
 from .paper import PaperTrader
 from .report import format_report
+from .research import evaluate, format_research
 from .strategy import STRATEGIES, make_strategy
 from .synth import generate
 from .webreport import WebReporter
+from .workflow import add_workflow_commands
+from .execution_cli import add_execution_commands
 
 
 def parse_params(raw: str | None) -> dict[str, str]:
@@ -138,6 +143,60 @@ def cmd_paper(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research(args: argparse.Namespace) -> int:
+    path = Path(args.data)
+    try:
+        candles = load_csv(path)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as e:
+        print(f"error: cannot read {path}: {e.strerror or e}", file=sys.stderr)
+        return 1
+    except (KeyError, ValueError, TypeError) as e:
+        print(f"error: {path} is not a valid candle CSV ({e})", file=sys.stderr)
+        return 1
+    report = evaluate(
+        candles, timeframe=args.timeframe, train_fraction=args.train_fraction,
+        starting_cash=args.cash, fee=args.fee, slippage=args.slippage,
+        size=args.size, max_drawdown=args.max_drawdown, min_trades=args.min_trades,
+    )
+    report["source"] = {"file": str(path), "sha256": digest,
+                        "synthetic_filename": "synthetic" in path.name.lower()}
+    if args.out:
+        try:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            # Preserve prior research: seeing a holdout changes its status.
+            with out.open("x") as f:
+                json.dump(report, f, indent=2, allow_nan=False)
+                f.write("\n")
+        except OSError as e:
+            print(f"error: cannot create report {args.out}: {e.strerror or e}", file=sys.stderr)
+            return 1
+    print(format_research(report))
+    if report["source"]["synthetic_filename"]:
+        print("SYNTHETIC DATA: these results only test the software, not a market edge.")
+    if args.out:
+        print(f"Saved research report to {args.out} (input SHA-256: {digest})")
+    return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+        from .server import create_app
+    except ImportError:
+        raise RuntimeError("Install the optional server dependencies with pip install -r requirements-server.txt") from None
+    import os
+    if args.host not in {"127.0.0.1", "localhost", "::1"} and not os.environ.get("PUBLIC_ORIGIN"):
+        raise ValueError("Set PUBLIC_ORIGIN to your HTTPS dashboard origin before binding to a public interface")
+    if not 1 <= args.port <= 65535:
+        raise ValueError("--port must be in [1, 65535]")
+    app = create_app(db_path=args.db)
+    uvicorn.run(app, host=args.host, port=args.port, workers=1,
+                proxy_headers=False, access_log=False)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tradingbot",
@@ -176,6 +235,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_strategy_args(p)
     p.set_defaults(func=cmd_backtest)
 
+    p = sub.add_parser("research", help="select on training data, evaluate once on a later holdout")
+    p.add_argument("--data", required=True, help="historical candle CSV; keep the holdout unseen")
+    p.add_argument("--timeframe", required=True, choices=sorted(TIMEFRAME_MS))
+    p.add_argument("--train-fraction", type=float, default=0.7)
+    p.add_argument("--cash", type=float, default=300.0, help="capital in the data's quote currency")
+    p.add_argument("--fee", type=float, default=0.001, help="fee per side; confirm your account's actual tier")
+    p.add_argument("--slippage", type=float, default=0.0005, help="assumed slippage per side")
+    p.add_argument("--size", type=float, default=1.0)
+    p.add_argument("--max-drawdown", type=float, default=0.25, help="research screen only; does not simulate a kill switch")
+    p.add_argument("--min-trades", type=int, default=10, help="minimum held-out trades for the research screen")
+    p.add_argument("--out", help="new JSON report file (existing files are never overwritten)")
+    p.set_defaults(func=cmd_research)
+
     p = sub.add_parser("paper", help="trade live prices with fake money")
     p.add_argument("--symbol", default="BTC/USDT")
     p.add_argument("--timeframe", default="1h", choices=sorted(TIMEFRAME_MS))
@@ -184,6 +256,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-drawdown", type=float, default=0.25, help="kill switch: stop if equity drops this far from peak")
     add_common_strategy_args(p)
     p.set_defaults(func=cmd_paper)
+
+    add_workflow_commands(sub)
+    add_execution_commands(sub)
+
+    p = sub.add_parser("serve", help="run the authenticated dashboard and automatic simulation worker")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--db", help="persistent server database (default: TRADINGBOT_DB or data/server.sqlite3)")
+    p.set_defaults(func=cmd_serve)
 
     return parser
 

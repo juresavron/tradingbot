@@ -1,0 +1,7 @@
+.venv/
+*.sqlite*
+*.log
+logs/
+data/
+backtest_results/
+hyperopt_results/

@@ -1,7 +1,15 @@
-# tradingbot
+# Tradingbot
 
-A small, honest crypto trading bot in pure Python. No dependencies, no API
-keys, no magic. It does three things:
+Crypto research and paper trading with a server-owned simulation worker,
+persistent SQLite memory, and an authenticated dashboard.
+
+Start the current dashboard with [SERVER.md](SERVER.md). A fresh account starts
+paused with EUR 300 of simulated funds. Docker and Fly deployment files are
+included in [FLY_DEPLOY.md](FLY_DEPLOY.md); **the app has not been deployed to
+Fly**. Automatic real-money orders and OpenAI analysis are not connected.
+
+The core command-line tools use the Python standard library. The optional
+server has separately pinned dependencies. The original CLI workflow includes:
 
 1. **fetch** — download real historical prices (free, no account needed)
 2. **backtest** — replay a strategy over that history with realistic costs
@@ -11,15 +19,12 @@ keys, no magic. It does three things:
 idea  →  backtest (past data)  →  paper trade (live data, fake money)  →  maybe, one day, real money
 ```
 
-Real money is deliberately **not wired up yet**. That step comes only after a
-strategy survives weeks of paper trading — and we do it together, carefully.
-
-**Ready to actually start? Follow [FIRST_TRADE.md](FIRST_TRADE.md)** — the
+For the command-line workflow, follow [FIRST_TRADE.md](FIRST_TRADE.md) — the
 complete step-by-step walkthrough from zero to your first (paper) trade, and
 the gated road to the first real one.
 
-There's also an optional **live web dashboard** (login-protected, hosted on
-Netlify + Supabase) to watch your bot from anywhere — see [WEB.md](WEB.md).
+The earlier Netlify/Supabase frontend remains documented in [WEB.md](WEB.md).
+It is separate from the current server dashboard in `dashboard/`.
 
 ---
 
@@ -83,6 +88,44 @@ python3 -m tradingbot backtest --stop 0.05 ...    # add a 5% stop-loss
 python3 -m tradingbot synth --days 365            # offline fake data (for testing the machinery)
 python3 -m unittest discover -s tests             # run the test suite
 ```
+
+Before choosing a strategy for paper trading, use the chronological
+training/holdout workflow in [RESEARCH.md](RESEARCH.md). The `research`
+command selects on earlier data, tests the chosen candidate on later data,
+and checks double trading costs. It includes an unproven, slower
+`donchian_breakout` candidate. Passing research checks does not establish
+future profitability.
+
+For persistent memory, timestamped news from RSS or an existing Apify dataset,
+and atomic paper execution, see [NEWS_BOT.md](NEWS_BOT.md). The `agent-paper`
+command records news context, decisions, balances, and fills in SQLite. News
+freshness can gate new entries; headlines do not automatically become orders.
+
+The [execution milestone](EXECUTION.md) adds durable order intents, risk
+checks, an offline execution simulator, and a Binance Spot Testnet adapter.
+Use `python3 -m tradingbot execution --help` for its manual order lifecycle.
+Simulation is the default; remote Testnet integration remains unverified.
+
+The [server dashboard](SERVER.md) connects strategies to automatic simulated
+buy/sell execution with persistent memory, authenticated controls, and a
+responsive frontend. It runs independently of the browser. Deployment files
+for one always-on Fly.io machine and SQLite volume are in [FLY_DEPLOY.md](FLY_DEPLOY.md).
+OpenAI analysis and automatic real-money trading are not enabled.
+
+The current [infrastructure assessment](INFRASTRUCTURE_REVIEW.md) records
+verified foundations, reproduced defects, and the remaining requirements
+before unattended or real-money operation. The server is a simulation
+prototype; a deployed dashboard and passing unit tests do not establish
+production readiness or profitability.
+
+The [architecture research](ARCHITECTURE_RESEARCH.md) compares seven existing
+trading engines and AI frameworks against our requirements, with pinned
+official sources and a proposed integration evaluation.
+
+The [isolated Freqtrade evaluation](FREQTRADE_EVALUATION.md) now records an
+executed stable-release comparison. Same-fixture signals and fills matched,
+but recovery/control acceptance gaps and blocked live-data access prevent
+adoption as-is. The current application was retained.
 
 If `fetch` fails, the exchange API may be blocked on your network (some
 countries/networks block Binance) — the bot automatically tries a mirror,

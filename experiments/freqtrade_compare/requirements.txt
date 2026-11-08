@@ -1,0 +1,3 @@
+# Isolated evaluation only. Keep the production server environment separate.
+freqtrade==2026.10
+pytest==9.2.0

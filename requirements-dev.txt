@@ -1,0 +1,3 @@
+# TestClient transport for the optional server tests.
+-r requirements-server.txt
+httpx==0.28.1

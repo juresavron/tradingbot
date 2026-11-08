@@ -94,7 +94,8 @@ class TestPaperTrader(unittest.TestCase):
             trader = make_trader(tmp, AlwaysLong(), fee=0.0, slippage=0.0, max_drawdown_stop=0.25)
             trader.step(price=100.0, candles=candles_upto(5), now_ms=99 * HOUR)
             # Price collapses 30% below entry -> drawdown past the 25% limit.
-            status = trader.step(price=70.0, candles=candles_upto(6, price=70.0), now_ms=105 * HOUR)
+            candles = candles_upto(5) + [Candle(5 * HOUR, 70.0, 70.0, 70.0, 70.0, 1.0)]
+            status = trader.step(price=70.0, candles=candles, now_ms=105 * HOUR)
             self.assertTrue(status["killed"])
             self.assertEqual(trader.state["qty"], 0.0)
             self.assertTrue(trader.state["killed"])

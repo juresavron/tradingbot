@@ -1,0 +1,271 @@
+{
+  "adoption_accepted": false,
+  "adoption_blockers": [
+    "accepted_order_lost_response",
+    "crash_after_acceptance_before_trade_commit",
+    "pause_during_slow_entry_preflight",
+    "out_of_order_order_snapshot",
+    "ported_strategy_rolling_history_target_state_not_preserved",
+    "account_drawdown_policy_not_ported",
+    "per_exit_cap_not_ported",
+    "live_data_paper_run_not_validated"
+  ],
+  "environment": {
+    "ccxt": "4.5.92",
+    "comparison_input_hashes": {
+      "experiments/freqtrade_compare/backtest_engine.py": "01560dbf218f5417e9fb6305eafcc026e5a94bbef80f9aa69be70f6ddf3feeaa",
+      "experiments/freqtrade_compare/compare_signals.py": "b4f733c9031cbde5f9bc652aa1deda5cb1e25fce696ac65b3fc1a18f2d1222b0",
+      "experiments/freqtrade_compare/config.paper.json": "4d034c87445eccf2a5f379cd82b357c11740ac8c357fa7c0f3f7f5daf59c6828",
+      "experiments/freqtrade_compare/evaluate.py": "89e0d1db79d998266e7193e70c1949b9e349ff3eca8c38044f7fbcb589a29839",
+      "experiments/freqtrade_compare/failure_checks.py": "8a0f1e4cb66605bfb09edccc7ab96837ebeccafc8e3225aff18e16d3a7858ff8",
+      "experiments/freqtrade_compare/paper_probe.py": "2371e67c8cce15875efb3b90328da5dc8bf63a2968ef659253eca542e85abf8e",
+      "experiments/freqtrade_compare/requirements.lock.txt": "d61fd9655b62729408430fd10d38603be8a07f049fb28ec0d594c750ed51f1cc",
+      "experiments/freqtrade_compare/strategies/DonchianBaseline.py": "cf1809eed24aeb28900344b946d7f310b77fdbfa03bdc567a95a811f9d4e13a0",
+      "tradingbot/automation.py": "87d8cd3de628152c1f9f3da691aa2089c646fc657f720330d564d6818463e045",
+      "tradingbot/execution.py": "0179f09943ab4d232e93cfbdb039226dcf3542dfee5d7d6410d26cec62d9c0d7",
+      "tradingbot/risk.py": "8ca2e0e8357e403a604ee2d56a5a1dc90d0ad6c88f1b248b4661f321de6b66dc",
+      "tradingbot/simulated_broker.py": "96022ad391c6a598359854ea7e9499068b2c6dfac88c08993c3814129b162d4a",
+      "tradingbot/strategy.py": "7ffd5bdb157c13edb4773585ab2a77d3e048c6ad34097dae14a74ad64f1d7039"
+    },
+    "freqtrade": "2026.10",
+    "installed_execution_sources": {
+      "exchange/exchange.py": {
+        "matches_pinned_release_source": true,
+        "sha256": "78d0485b0ce4298e7ff9f2804362e7f421665eaadb25ac969f654a642d7bf9c0"
+      },
+      "freqtradebot.py": {
+        "matches_pinned_release_source": true,
+        "sha256": "fccf601681620af409b6d5e76b0fb1cf60fd99b10f8661c3c95d68a7cc9b463f"
+      },
+      "optimize/backtesting.py": {
+        "matches_pinned_release_source": true,
+        "sha256": "1d45e0b34ddf30813bbdf51a20be6e8345a65b668f373f8ce2fbb6e93271b234"
+      },
+      "persistence/trade_model.py": {
+        "matches_pinned_release_source": true,
+        "sha256": "a011ca8686a205fd279ef665a2a3d5a1a4e3fb8cec9cbbac7f429eed0da85c2d"
+      },
+      "strategy/interface.py": {
+        "matches_pinned_release_source": true,
+        "sha256": "87f06f0f2df0c3298949002a250d99cf801b9cee794f332deffcc875c2c6f4a1"
+      },
+      "wallets.py": {
+        "matches_pinned_release_source": true,
+        "sha256": "6a4809524fbb3ed44afba98ba8bdc7f4d8b79627c25210585ef86165ae263370"
+      }
+    },
+    "python": "3.12.14",
+    "upstream_commit": "4cf0351e08d26e96a6429ef48103b726bb230cf8"
+  },
+  "evaluated_at_utc": "2026-11-08T01:34:05.778156+00:00",
+  "evaluation_complete": true,
+  "failure_checks": {
+    "checks": [
+      {
+        "name": "accepted_order_lost_response",
+        "observations": {
+          "accepted_orders": 1,
+          "accepted_orders_after_next_entry_cycle": 2,
+          "enter_positions_return": 0,
+          "entry_exception": null,
+          "exchange_btc": 0.00125,
+          "exchange_btc_after_next_entry_cycle": 0.0025,
+          "lookup_calls": 0,
+          "sqlite_open_trades_after_next_entry_cycle": 1,
+          "sqlite_open_trades_after_restart": 0,
+          "sqlite_orders_after_restart": 0
+        },
+        "safety_invariant": "Accepted exposure must be correlated to durable trade/order state after restart.",
+        "status": "FAIL"
+      },
+      {
+        "name": "crash_after_acceptance_before_trade_commit",
+        "observations": {
+          "accepted_orders": 1,
+          "exchange_btc": 0.00125,
+          "lookup_calls": 0,
+          "sqlite_open_trades_after_restart": 0,
+          "sqlite_orders_after_restart": 0
+        },
+        "safety_invariant": "A crash after venue acceptance but before the first local commit must not hide exposure.",
+        "status": "FAIL"
+      },
+      {
+        "name": "restart_recovers_known_order",
+        "observations": {
+          "create_calls": 1,
+          "exchange_btc": 0.00125,
+          "lookup_calls": 1,
+          "sqlite_amount": 0.00125,
+          "sqlite_trades": 1
+        },
+        "safety_invariant": "A persisted open order that fills offline must recover its exposure without another entry.",
+        "status": "PASS"
+      },
+      {
+        "name": "partial_entry_cancel",
+        "observations": {
+          "exchange_btc": 0.0005,
+          "filled": 0.0005,
+          "order_open": false,
+          "order_status": "canceled",
+          "sqlite_amount": 0.0005
+        },
+        "safety_invariant": "Canceling a partly filled entry must retain exactly the owned partial quantity across restart.",
+        "status": "PASS"
+      },
+      {
+        "name": "bnb_commission_conversion",
+        "observations": {
+          "exchange_bnb": 0.9999,
+          "exchange_btc": 0.00125,
+          "fee_open_cost_in_quote_eur": 0.030000000000000002,
+          "fee_open_currency": "BNB",
+          "fee_open_rate": 0.0004,
+          "fixture_bnb_eur_rate": 300.0,
+          "raw_order_fee_bnb": 0.0001,
+          "sqlite_amount": 0.00125
+        },
+        "safety_invariant": "A BNB-paid commission must be identified and converted without subtracting it from BTC quantity.",
+        "status": "PASS"
+      },
+      {
+        "name": "pause_during_slow_entry_preflight",
+        "observations": {
+          "bot_state": "paused",
+          "create_calls_after_preflight": 1,
+          "create_calls_at_pause_ack": 0,
+          "rpc_pause_reply": {
+            "status": "paused, no more entries will occur from now. Run /start to enable entries."
+          },
+          "sqlite_open_trades": 1
+        },
+        "safety_invariant": "Acknowledged entry pause must prevent an entry still waiting on price preflight.",
+        "status": "FAIL"
+      },
+      {
+        "name": "exit_while_entry_paused",
+        "observations": {
+          "bot_state": "paused",
+          "exchange_btc": 0.0,
+          "exit_method_return": true,
+          "remote_sides": [
+            "buy",
+            "sell"
+          ],
+          "sqlite_open_trades": 0
+        },
+        "safety_invariant": "Entry pause must continue to permit exits.",
+        "status": "PASS"
+      },
+      {
+        "name": "duplicate_terminal_order_snapshot",
+        "observations": {
+          "fee_open_cost_in_quote_eur": 0.030000000000000002,
+          "order_count": 1,
+          "order_filled": 0.00125,
+          "trade_amount": 0.00125
+        },
+        "safety_invariant": "Repeated identical terminal snapshots must not multiply quantity or fees.",
+        "status": "PASS"
+      },
+      {
+        "name": "out_of_order_order_snapshot",
+        "observations": {
+          "actual_exchange_filled": 0.00125,
+          "fill_times_ms_after_creation": {
+            "latest_full": 2000,
+            "older_partial": 1000
+          },
+          "stored_order_filled": 0.0005,
+          "stored_order_open": true,
+          "stored_order_status": "open",
+          "trade_amount": 0.00125
+        },
+        "safety_invariant": "A stale lower-cumulative snapshot must not reopen a terminal order or reduce recorded fills.",
+        "status": "FAIL"
+      }
+    ],
+    "harness_errors": [],
+    "limitations": [
+      "Venue boundary is a deterministic fixture, not Binance, CCXT transport, or a matching engine.",
+      "RPC notifications, candle provider and pairlist I/O are replaced; full worker scheduling is not validated.",
+      "Crash injection rolls back and removes an uncommitted SQLite session; it does not SIGKILL an operating-system process.",
+      "Out-of-order coverage directly invokes update_trade_state on a terminal order with an older snapshot; normal manage_open_orders would not ordinarily poll that terminal order again. This tests method-level monotonic defense, not observed Binance scheduling or private-event behavior.",
+      "No profitability, strategy selection, WebSocket connectivity, geographic eligibility or production reliability claim is made."
+    ],
+    "network_attempts_blocked": 0,
+    "summary": {
+      "BLOCKED": 0,
+      "FAIL": 4,
+      "PASS": 5
+    }
+  },
+  "online_paper": {
+    "attempted": true,
+    "config_sha256": "4d034c87445eccf2a5f379cd82b357c11740ac8c357fa7c0f3f7f5daf59c6828",
+    "dry_run": true,
+    "elapsed_seconds": 2.942,
+    "exchange": "binance",
+    "execution": "simulation",
+    "inherited_ca_configured": true,
+    "inherited_proxy_environment": true,
+    "public_market_access_verified": false,
+    "raw_log": "data/freqtrade_compare/online/20261108T013303Z-b97d8893.log",
+    "reason": "proxy_connect_403",
+    "removed_freqtrade_environment_overrides": 0,
+    "returncode": 2,
+    "reused_prior_probe": true,
+    "runtime_config_changes": [
+      "CCXT trust_env/client-specific flags=true",
+      "TLS verify=true",
+      "inherited CA bundle when available",
+      "WebSockets disabled; REST public data only"
+    ],
+    "status": "blocked",
+    "summary": "The proxy rejected Binance public market access with HTTP 403. No sustained paper run was verified.",
+    "sustained_paper_trading_verified": false,
+    "termination": null,
+    "timed_out": false,
+    "timeout_seconds": 25.0,
+    "tls_verification_enabled": true,
+    "transport_note": "Installed CCXT requires explicit requests_trust_env and aiohttp_trust_env; generic trust_env alone does not enable its derived client flags.",
+    "user_data_dir": "/workspace/tradingbot/data/freqtrade_compare/online/probe-20261108T013303115491Z",
+    "websockets_enabled": false
+  },
+  "profitability_assessed": false,
+  "real_orders_sent": false,
+  "recommendation": "do_not_replace_current_bot_as_is",
+  "scope": "Controlled offline engine comparison plus optional credentialless native paper startup probe; no sustained forward validation",
+  "shared_fixture": {
+    "bars": 680,
+    "data_sha256": "ad84765004184d304cdd3918e7d86e6230d9b1926156961dd4ac2ce632b28043",
+    "freqtrade_final_balance": 293.268453,
+    "parity": {
+      "fills_compared": 8,
+      "final_balance_delta": "0.000000",
+      "mismatches": [],
+      "passed": true,
+      "reference_fully_flat": true,
+      "scope": "this shared fixture only"
+    },
+    "reference_final_equity": 293.268453,
+    "source": "synthetic"
+  },
+  "signal_parity": {
+    "bars": 932,
+    "fixture_cases": 4,
+    "prefixes_checked": 932,
+    "rolling_history_probe": {
+      "both_implementations_agree_for_each_seed": true,
+      "full_final_target": 1,
+      "full_history_bars": 641,
+      "runtime_or_restart_parity_proven": false,
+      "status": "known_history_seed_difference_confirmed",
+      "truncated_final_target": 0,
+      "truncated_history_bars": 240
+    },
+    "stake_checks": 6,
+    "status": "passed"
+  }
+}
