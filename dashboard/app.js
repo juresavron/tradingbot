@@ -13,7 +13,7 @@ const REASONS = {
   started: "Entry permission requested. Waiting for the next cycle.",
   flatten_requested: "Close requested; new entries are paused.",
   entries_paused: "Entry signal observed; new entries are paused.",
-  strategy_long: "Strategy targets a long position.",
+  strategy_long: "Strategy targets a long position, including an ongoing signal.",
   strategy_flat: "Strategy targets cash.",
   already_flat: "No position is open.",
   blocked_no_fresh_news: "Entry blocked: no fresh news is available.",
@@ -36,6 +36,15 @@ const REASONS = {
   pipeline_error: "The execution pipeline is blocked.",
   execution_unresolved: "An order outcome is unresolved; new entries are blocked.",
   news_unavailable: "Fresh news is required but unavailable.",
+  price_event_unknown: "The exchange price timestamp is unavailable.",
+  market_quote_stale: "The last trade or its receipt is too old; waiting for a fresh observation.",
+  market_quote_unknown_time: "The exchange price timestamp is unavailable.",
+  market_quote_clock_skew: "The price timestamp disagrees with the worker clock.",
+  market_quote_out_of_order: "An older price observation was rejected.",
+  market_request_timeout: "Market request timed out; waiting for a fresh observation.",
+  market_request_pending: "A timed-out market request is still finishing; new requests are bounded.",
+  market_cycle_deadline: "The market observation budget expired.",
+  market_quote_expired_before_submission: "The price observation expired before submission; entry was canceled.",
 };
 let snapshot = null;
 let signedInEmail = null;
@@ -281,8 +290,8 @@ function render(data) {
   $("metric-drawdown").textContent = percent(portfolio.drawdown_pct);
   $("risk-limit").textContent = "of " + percent(Number(config.max_drawdown) * 100) + " limit";
   $("engine-strategy").textContent = (STRATEGIES[config.strategy]?.name || config.strategy || "No strategy") + " · " + (config.symbol || "—") + " · " + (config.timeframe || "—");
-  $("market-age").textContent = status.market_time_ms ? (source === "demo" ? "Replay · " + timestamp(status.market_time_ms, true) : "Price observed " + age(status.market_time_ms)) : "No price observed";
-  $("market-age").title = status.market_time_ms ? new Date(Number(status.market_time_ms)).toISOString() : "";
+  $("market-age").textContent = source === "demo" && status.market_time_ms ? "Replay · " + timestamp(status.market_time_ms, true) : status.price_event_ms ? "Last exchange trade " + age(status.price_event_ms) : "Exchange trade age unknown";
+  $("market-age").title = status.quote_received_ms ? "Received " + new Date(Number(status.quote_received_ms)).toISOString() : "No timestamped quote received";
   $("last-updated").textContent = "Updated " + timestamp(Date.now());
   renderHealth(status, data.readiness);
   renderChart(data.equity || []);
@@ -390,6 +399,9 @@ function renderConfig(config, readiness, status) {
   const rows = [
     ["Account", snapshot.account_id || "—"],
     ["Strategy parameters", JSON.stringify(config.params || {})],
+    ["Entry policy", "Join the current target signal, including one that began before startup"],
+    ["Quote source", status.quote_source || (config.source === "demo" ? "Historical demo fixture" : "Not observed")],
+    ["Quote received", status.quote_received_ms ? age(status.quote_received_ms) : "Not recorded"],
     ["Starting cash", money(config.starting_cash)],
     ["Maximum order", money(config.max_order_notional)],
     ["Cash per entry", percent(Number(config.position_fraction) * 100)],

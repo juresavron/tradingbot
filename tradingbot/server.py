@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import math
 import os
 import secrets
 import time
-from threading import RLock
+from threading import BoundedSemaphore, RLock
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,12 +22,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .auth import normalize_email, validate_password_hash, verify_password
 from .orders import TERMINAL_STATUSES
+from .market_io import MAX_CLOCK_SKEW_MS, MAX_QUOTE_AGE_MS
 
 COOKIE = "tradingbot_session"
 SESSION_SECONDS = 8 * 60 * 60
 MAX_BODY_BYTES = 16 * 1024
 DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard"
 _SNAPSHOT_UNAVAILABLE = object()
+_PRIVATE_IPV4 = tuple(ipaddress.ip_network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 
 def operational_readiness(service, snapshot=None) -> dict:
@@ -47,6 +50,7 @@ def operational_readiness(service, snapshot=None) -> dict:
     result = {
         "ready": False, "execution": "simulation", "worker_alive": alive,
         "storage_available": available, "market_fresh": False,
+        "price_event_fresh": None, "quote_received_fresh": False,
         "entries_requested": False, "blocking_reasons": [],
     }
     reasons = result["blocking_reasons"]
@@ -86,8 +90,17 @@ def operational_readiness(service, snapshot=None) -> dict:
     heartbeat_fresh = fresh_timestamp(heartbeat) and not status.get("heartbeat_stale", False)
     # Demo fixtures deliberately have historical market times. Their worker
     # heartbeat is wall time; never declare them stale because of fixture time.
+    event_ms, receipt_ms = status.get("price_event_ms"), status.get("quote_received_ms")
+    receipt_fresh = (type(receipt_ms) is int and receipt_ms > 0
+                     and -MAX_CLOCK_SKEW_MS <= now_ms - receipt_ms <= deadline)
+    event_known = type(event_ms) is int and event_ms > 0
+    event_fresh = (event_known and -MAX_CLOCK_SKEW_MS <= now_ms - event_ms <= MAX_QUOTE_AGE_MS
+                   and type(receipt_ms) is int and event_ms <= receipt_ms + MAX_CLOCK_SKEW_MS)
+    result["quote_received_fresh"] = bool(receipt_fresh)
+    if source == "binance" and event_known:
+        result["price_event_fresh"] = bool(event_fresh)
     market_fresh = bool(observed and heartbeat_fresh and (
-        source == "demo" or source == "binance" and fresh_timestamp(status.get("market_time_ms"))
+        source == "demo" or source == "binance" and receipt_fresh and event_fresh
     ))
     result["market_fresh"] = market_fresh
     if not observed:
@@ -95,7 +108,7 @@ def operational_readiness(service, snapshot=None) -> dict:
     elif not heartbeat_fresh:
         reasons.append("heartbeat_stale")
     elif not market_fresh:
-        reasons.append("market_data_stale")
+        reasons.append("price_event_unknown" if source == "binance" and not event_known else "market_data_stale")
 
     orders = snapshot.get("orders", [])
     if not isinstance(orders, list) or any(
@@ -204,12 +217,35 @@ def create_app(*, db_path=None, token=None, public_origin=None, start_worker=Tru
         if parsed.scheme != "https" and parsed.hostname not in ("localhost", "127.0.0.1", "::1", "testserver"):
             raise ValueError("A public dashboard requires HTTPS in PUBLIC_ORIGIN")
     secure_cookie = bool(origin and origin.startswith("https://"))
+    fly_proxy = os.environ.get("TRADINGBOT_FLY_PROXY", "0")
+    if fly_proxy not in ("0", "1"):
+        raise ValueError("TRADINGBOT_FLY_PROXY must be 0 or 1")
+    if fly_proxy == "1" and (not os.environ.get("FLY_APP_NAME") or not secure_cookie):
+        raise ValueError("Fly proxy identity requires a Fly machine and an HTTPS origin")
     allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
     if origin:
         allowed_hosts.append(urlsplit(origin).hostname)
     sessions: dict[str, tuple[float, str | None]] = {}
     failed_logins: dict[str, deque] = defaultdict(deque)
     auth_lock = RLock()
+    password_slots = BoundedSemaphore(2)
+
+    def login_address(request):
+        peer = request.client.host if request.client else "unknown"
+        # Opt in only on Fly's IPv4-only HTTP listener (enforced by cmd_serve).
+        # Public HTTP traffic passes Fly Proxy, which overwrites this header.
+        # Direct 6PN, loopback and non-Fly requests cannot supply identity.
+        # X-Forwarded-For is intentionally never trusted.
+        if fly_proxy == "1":
+            try:
+                address = ipaddress.ip_address(peer)
+                values = request.headers.getlist("fly-client-ip")
+                if (address.version == 4 and any(address in network for network in _PRIVATE_IPV4)
+                        and len(values) == 1 and "%" not in values[0]):
+                    return str(ipaddress.ip_address(values[0]))
+            except ValueError:
+                pass
+        return peer
 
     @asynccontextmanager
     async def lifespan(app):
@@ -313,17 +349,25 @@ def create_app(*, db_path=None, token=None, public_origin=None, start_worker=Tru
     @app.post("/api/login")
     def login(body: Login, request: Request):
         now = time.monotonic()
-        # Client address is the server's observed address, never a user-supplied
-        # forwarding header. Fly ingress should enforce its own rate limits too.
-        address = request.client.host if request.client else "unknown"
+        address = login_address(request)
+        ticket = (now, object())
         with auth_lock:
-            if len(failed_logins) > 1000:
-                failed_logins.clear()
+            for key, bucket in list(failed_logins.items()):
+                while bucket and bucket[0][0] <= now - 60:
+                    bucket.popleft()
+                if not bucket:
+                    del failed_logins[key]
+            if address not in failed_logins and len(failed_logins) >= 1000:
+                raise HTTPException(429, "Too many attempts; wait a minute")
             attempts = failed_logins[address]
-            while attempts and attempts[0] < now - 60:
-                attempts.popleft()
             if len(attempts) >= 5:
                 raise HTTPException(429, "Too many attempts; wait a minute")
+            # Reserve before expensive work so simultaneous attempts cannot
+            # bypass the bucket. Success removes only its own reservation.
+            attempts.append(ticket)
+        if not password_slots.acquire(blocking=False):
+            raise HTTPException(429, "Sign-in is busy; retry shortly")
+        try:
             valid = False
             if body.token is not None and body.email is None and body.password is None:
                 # Retain the existing private operator token for recovery/API use.
@@ -334,9 +378,13 @@ def create_app(*, db_path=None, token=None, public_origin=None, start_worker=Tru
                 email_matches = hmac.compare_digest(body.email.strip().casefold().encode(), owner_email.encode())
                 valid = password_matches and email_matches
             if not valid:
-                attempts.append(now)
                 raise HTTPException(401, "Invalid email or password")
-            attempts.clear()
+        finally:
+            password_slots.release()
+        now = time.monotonic()
+        with auth_lock:
+            if ticket in attempts:
+                attempts.remove(ticket)
             for digest, (expiry, _email) in list(sessions.items()):
                 if expiry <= now:
                     sessions.pop(digest, None)

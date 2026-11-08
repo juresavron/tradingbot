@@ -18,7 +18,9 @@ from decimal import Decimal, ROUND_DOWN, ROUND_UP, localcontext
 from pathlib import Path
 
 from .candles import TIMEFRAME_MS, Candle
-from .exchange import MarketData
+from .exchange import MarketData, MarketQuote
+from .market_io import (BoundedMarketCall, MARKET_CYCLE_SECONDS, MAX_CLOCK_SKEW_MS,
+                        MAX_QUOTE_AGE_MS, MAX_RECEIPT_AGE_MS)
 from .execution import ExecutionEngine
 from .memory import TradingMemory
 from .order_store import ExecutionStore
@@ -35,6 +37,7 @@ DEFAULT_CONFIG = {
     "max_drawdown": 0.10, "news_policy": "observe",
     "fee": 0.001, "slippage": 0.0,
 }
+ENTRY_POLICY = "join-current-target"
 
 
 def _now() -> int:
@@ -68,6 +71,8 @@ class AutomationRuntime:
         self._stop = threading.Event()
         self._thread = None
         self._worker_error = None
+        self._quote_call = BoundedMarketCall()
+        self._history_call = BoundedMarketCall()
         self._ownership = open(self.db_path + ".automation.lock", "a")
         try:
             fcntl.flock(self._ownership, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -249,6 +254,7 @@ class AutomationRuntime:
                    "state": {"desired_running": False, "initialized": False, "killed": False,
                              "flatten": False, "exit_pending": False, "error": None, "heartbeat_ms": None,
                              "market_time_ms": None, "price": None, "history": [],
+                             "price_event_ms": None, "quote_received_ms": None, "quote_source": None,
                              "last_decision_bar": None, "demo_cursor": self._warmup(config),
                              "demo_origin_ms": self._demo_origin(config),
                              "sequence": 0, "inflight": None, "peak_equity": str(config["starting_cash"]),
@@ -374,35 +380,51 @@ class AutomationRuntime:
         if config["source"] == "demo":
             origin = state.setdefault("demo_origin_ms", self._demo_origin(config))
             return self._demo(config, state["demo_cursor"], origin)
-        client = MarketData()
-        interval = TIMEFRAME_MS[config["timeframe"]]
-        data_error = None
-        try:
-            bars = client.get_candles(config["symbol"], config["timeframe"], limit=1000)
-        except Exception:
-            bars, data_error = None, "market_data_unavailable"
-        # The ticker is requested last, including when history failed, so
-        # exits use a fresh price instead of waiting through a history call.
-        value = client.get_price(config["symbol"])
+        deadline = time.monotonic() + MARKET_CYCLE_SECONDS
+        client = MarketData(timeout=1.0, budget_seconds=2.0)
+        quote = self._quote_call.run((row["revision"], config["symbol"]),
+                                     lambda: client.get_quote(config["symbol"]), timeout=2.0)
         received_ms = at_ms if clock_override else _now()
+        if not isinstance(quote, MarketQuote):
+            raise ValueError("market_quote_unknown_time")
+        value = quote.price
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError("market_data_invalid_price")
-        if bars is not None:
-            try:
-                self._validate_bars(bars, interval, received_ms)
-                expected_open = received_ms // interval * interval - interval
-                latest_open = bars[-1].ts
-                # Permit a single publication lag at the exact boundary,
-                # never a whole missing interval throughout the next candle.
-                grace_ms = min(60_000, interval // 10)
-                publication_grace = (received_ms % interval <= grace_ms
-                                     and latest_open == expected_open - interval)
-                if latest_open != expected_open and not publication_grace:
-                    raise ValueError("market_data_stale")
-            except ValueError as exc:
-                bars, data_error = None, str(exc)
-        return {"bars": bars, "price": _decimal(value), "market_time_ms": received_ms,
-                "next_cursor": None, "data_error": data_error}
+        self._validate_quote_times(quote.event_ms, quote.received_ms, received_ms)
+        prior_event = state.get("price_event_ms")
+        if prior_event is not None and quote.event_ms < prior_event:
+            raise ValueError("market_quote_out_of_order")
+        return {"bars": None, "price": _decimal(value), "market_time_ms": received_ms,
+                "price_event_ms": quote.event_ms, "quote_received_ms": quote.received_ms,
+                "quote_source": quote.source, "next_cursor": None, "deadline": deadline}
+
+    @staticmethod
+    def _validate_quote_times(event_ms, receipt_ms, now_ms):
+        if type(event_ms) is not int or type(receipt_ms) is not int or min(event_ms, receipt_ms) <= 0:
+            raise ValueError("market_quote_unknown_time")
+        if event_ms > receipt_ms + MAX_CLOCK_SKEW_MS or receipt_ms > now_ms + MAX_CLOCK_SKEW_MS:
+            raise ValueError("market_quote_clock_skew")
+        if now_ms - event_ms > MAX_QUOTE_AGE_MS or now_ms - receipt_ms > MAX_RECEIPT_AGE_MS:
+            raise ValueError("market_quote_stale")
+
+    def _closed_history(self, row, market):
+        config, state = row["config"], row["state"]
+        interval, at_ms = TIMEFRAME_MS[config["timeframe"]], market["market_time_ms"]
+        expected_open = at_ms // interval * interval - interval
+        # Closed history was validated when committed. Within this interval
+        # only a price observation is needed; preserve the full signal seed.
+        if state["history"] and state["history"][-1][0] == expected_open:
+            return [Candle(*state["history"][-1])]
+        client = MarketData(timeout=1.0, budget_seconds=2.0)
+        bars = self._history_call.run((row["revision"], expected_open),
+            lambda: client.get_candles(config["symbol"], config["timeframe"], limit=1000),
+            timeout=min(1.0, market["deadline"] - time.monotonic()), reuse_completed=True)
+        self._validate_bars(bars, interval, at_ms)
+        grace_ms = min(60_000, interval // 10)
+        publication_grace = (at_ms % interval <= grace_ms and bars[-1].ts == expected_open - interval)
+        if bars[-1].ts != expected_open and not publication_grace:
+            raise ValueError("market_data_stale")
+        return bars
 
     def _merge_history(self, row, bars, now_ms):
         interval = TIMEFRAME_MS[row["config"]["timeframe"]]
@@ -438,7 +460,13 @@ class AutomationRuntime:
                     "quote_asset": quote, "base_asset": base}
 
     def _finish_cycle(self, memory, row, broker, plan, action, reason, *, advance=True):
-        state = row["state"]
+        # A fill is already durable at this boundary. Publish acknowledgement
+        # only after its decision/cost/equity transaction commits. A failed
+        # commit must leave the persisted inflight plan available for recovery.
+        # Only top-level state fields are replaced below. Retained candle
+        # history and the plan are read-only, so they need no expensive copy.
+        candidate = dict(row, state=dict(row["state"]))
+        state = candidate["state"]
         previous_error = state["error"]
         state["last_action"], state["last_reason"] = action, reason
         state["heartbeat_ms"] = max(state["heartbeat_ms"] or 0, plan["at_ms"])
@@ -448,7 +476,7 @@ class AutomationRuntime:
         if advance and plan["next_cursor"] is not None:
             state["demo_cursor"] = plan["next_cursor"]
         state["inflight"] = None
-        portfolio = self._portfolio(row, broker)
+        portfolio = self._portfolio(candidate, broker)
         state["peak_equity"] = str(portfolio["peak_equity"])
         state["error"] = None
         if portfolio["position_value"] < float(broker.get_rules(row["config"]["symbol"]).min_notional):
@@ -480,7 +508,9 @@ class AutomationRuntime:
                  reason, _json(plan["news_ids"]), state["price"], row["config"]["strategy"]))
             memory.connection.execute("INSERT INTO automation_equity(revision,at_ms,equity,price) VALUES (?,?,?,?)",
                                       (row["revision"], plan["market_time_ms"], portfolio["equity"], state["price"]))
-            self._write_state(memory, row)
+            self._write_state(memory, candidate)
+        row["state"].clear()
+        row["state"].update(state)
 
     @staticmethod
     def _record_event(memory, row, at_ms, kind, detail):
@@ -491,11 +521,22 @@ class AutomationRuntime:
         """Local-only check inside ExecutionEngine's submit-claim transaction."""
         current = self._load(memory)
         state = current["state"]
-        return bool(current["revision"] == row["revision"]
+        return bool(self._entry_quote_valid(row, plan)
+                    and current["revision"] == row["revision"]
                     and current["control"]["generation"] == plan["control_generation"]
                     and state["desired_running"]
                     and not (state["flatten"] or state["killed"] or state["replay_complete"]
                              or state.get("exit_pending", False) or self._stop.is_set()))
+
+    def _entry_quote_valid(self, row, plan):
+        if row["config"]["source"] != "binance":
+            return True
+        now_ms = plan["at_ms"] if plan.get("clock_override", False) else _now()
+        try:
+            self._validate_quote_times(plan.get("price_event_ms"), plan.get("quote_received_ms"), now_ms)
+        except ValueError:
+            return False
+        return True
 
     def _process_inflight(self, memory, row, broker, store, engine, *, recovering=False):
         plan = row["state"]["inflight"]
@@ -535,7 +576,8 @@ class AutomationRuntime:
         if order["last_error"] == "submission_not_authorized":
             self._refresh_control(memory, row)
             self._finish_cycle(memory, row, broker, plan, "BLOCKED",
-                               "control_changed_before_submission", advance=False)
+                               "control_changed_before_submission" if self._entry_quote_valid(row, plan)
+                               else "market_quote_expired_before_submission", advance=False)
             return
         action = plan["side"] if order["status"] == "FILLED" else "BLOCKED"
         self._finish_cycle(memory, row, broker, plan, action,
@@ -588,6 +630,8 @@ class AutomationRuntime:
                     state["heartbeat_ms"] = at_ms
                 state["price"] = float(market["price"])
                 state["market_time_ms"] = market["market_time_ms"]
+                for key in ("price_event_ms", "quote_received_ms", "quote_source"):
+                    state[key] = market.get(key)
                 portfolio = self._portfolio(row, broker)
                 state["peak_equity"] = str(portfolio["peak_equity"])
                 if portfolio["drawdown_pct"] >= config["max_drawdown"] * 100:
@@ -602,17 +646,25 @@ class AutomationRuntime:
                 else:
                     if market.get("data_error"):
                         raise ValueError(market["data_error"])
-                    history = self._merge_history(row, market["bars"], market["market_time_ms"])
-                    state["history"] = [[b.ts, b.open, b.high, b.low, b.close, b.volume] for b in history]
-                    bar_ts = history[-1].ts
-                    target = self._strategy(config).signals(history)[-1]
-                    if bar_ts == state["last_decision_bar"]:
+                    if market["bars"] is None:
+                        market["bars"] = self._closed_history(row, market)
+                    # Commands can arrive during the bounded history request
+                    # as well as during quote retrieval. Observe them before
+                    # choosing a side; submit claims still fence the generation.
+                    self._refresh_control(memory, row)
+                    forced_exit = state["flatten"] or state["killed"] or state.get("exit_pending", False)
+                    self._validate_bars(market["bars"], TIMEFRAME_MS[config["timeframe"]], market["market_time_ms"])
+                    bar_ts = market["bars"][-1].ts
+                    if bar_ts == state["last_decision_bar"] and not forced_exit:
                         if state["error"]:
                             with memory.transaction():
                                 self._record_event(memory, row, at_ms, "recovered", {"previous_error": state["error"]})
                         state["error"] = None
                         self._save(memory, row)
                         return self.snapshot()
+                    history = self._merge_history(row, market["bars"], market["market_time_ms"])
+                    state["history"] = [[b.ts, b.open, b.high, b.low, b.close, b.volume] for b in history]
+                    target = 0 if forced_exit else self._strategy(config).signals(history)[-1]
                 articles = memory.recent_news(market["market_time_ms"], config["symbol"].split("/")[0],
                                               86_400_000, limit=50, include_body=False)
                 reason = "strategy_long" if target else "strategy_flat"
@@ -661,6 +713,9 @@ class AutomationRuntime:
                         "control_generation": entry_generation,
                         "side": side, "quantity": _text(quantity), "price": _text(price)}
                 plan["reference_price"] = _text(reference_price)
+                plan["clock_override"] = now_ms is not None
+                plan["price_event_ms"] = market.get("price_event_ms")
+                plan["quote_received_ms"] = market.get("quote_received_ms")
                 if side is not None and (not quantity or quantity * price < rules.min_notional):
                     side = plan["side"] = None
                     plan["reason"] = "position_or_budget_below_minimum_order"
@@ -678,17 +733,24 @@ class AutomationRuntime:
                 safe_codes = {"market_data_empty", "market_data_invalid_time", "market_data_invalid_prices",
                               "market_data_invalid_price", "market_data_invalid_range", "market_data_invalid_volume",
                               "market_data_gap", "market_data_stale", "market_data_seed_changed", "market_data_conflict", "market_data_unavailable",
+                              "market_quote_unknown_time", "market_quote_stale", "market_quote_clock_skew", "market_quote_out_of_order",
+                              "market_cycle_deadline", "market_request_timeout", "market_request_pending",
                               "execution_outcome_unresolved", "market_price_below_tick"}
-                state["error"] = str(exc) if isinstance(exc, ValueError) and str(exc) in safe_codes else "market_or_execution_unavailable"
-                state["last_action"] = "BLOCKED"
-                state["last_reason"] = "Waiting for valid data or execution reconciliation"
                 with memory.transaction():
+                    # Reload even if a commit succeeded but its acknowledgement
+                    # failed. Never overwrite durable recovery state with a
+                    # partially processed in-memory row.
+                    row = self._load(memory)
+                    state = row["state"]
+                    state["error"] = str(exc) if isinstance(exc, ValueError) and str(exc) in safe_codes else "market_or_execution_unavailable"
+                    state["last_action"] = "BLOCKED"
+                    state["last_reason"] = "Waiting for valid data or execution reconciliation"
                     self._record_event(memory, row, at_ms, "error", {"code": state["error"]})
                     self._write_state(memory, row)
         return self.snapshot()
 
     def snapshot(self) -> dict:
-        with TradingMemory(self.db_path) as memory:
+        with TradingMemory(self.db_path) as memory, memory.transaction(write=False):
             row = self._load(memory)
             config, state = row["config"], row["state"]
             broker = object.__new__(SimulatedBroker)
@@ -727,6 +789,9 @@ class AutomationRuntime:
                                "flatten_requested": bool(state["flatten"] or state.get("exit_pending", False)),
                                "control_generation": row["control"]["generation"],
                                "heartbeat_ms": state["heartbeat_ms"], "market_time_ms": state["market_time_ms"],
+                               "price_event_ms": state.get("price_event_ms"),
+                               "quote_received_ms": state.get("quote_received_ms"), "quote_source": state.get("quote_source"),
+                               "entry_policy": ENTRY_POLICY,
                                "price": state["price"], "source": config["source"], "mode": "simulation",
                                "error": state["error"], "last_action": state["last_action"], "last_reason": state["last_reason"],
                                "worker_enabled": self.worker_enabled, "worker_alive": self.worker_alive,

@@ -191,6 +191,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         raise ValueError("Set PUBLIC_ORIGIN to your HTTPS dashboard origin before binding to a public interface")
     if not 1 <= args.port <= 65535:
         raise ValueError("--port must be in [1, 65535]")
+    if os.environ.get("TRADINGBOT_FLY_PROXY") == "1" and args.host != "0.0.0.0":
+        raise ValueError("Fly proxy identity requires the IPv4-only 0.0.0.0 listener")
     app = create_app(db_path=args.db)
     uvicorn.run(app, host=args.host, port=args.port, workers=1,
                 proxy_headers=False, access_log=False)

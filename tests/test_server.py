@@ -5,6 +5,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 from pathlib import Path
+from tradingbot.exchange import MarketQuote
 
 try:
     from fastapi.testclient import TestClient
@@ -162,7 +163,8 @@ class TestControlServer(unittest.TestCase):
             self.assertFalse(readiness["entries_requested"])
             self.assertTrue(readiness["market_fresh"])
             self.assertEqual(set(readiness), {"ready", "execution", "worker_alive", "storage_available",
-                                               "market_fresh", "entries_requested", "blocking_reasons"})
+                                               "market_fresh", "price_event_fresh", "quote_received_fresh",
+                                               "entries_requested", "blocking_reasons"})
             self.assertNotIn("cash", response.text)
             self.login(client)
             runtime.snapshot.reset_mock()
@@ -176,7 +178,8 @@ class TestControlServer(unittest.TestCase):
         cases = [
             ({"heartbeat_ms": now - 60_001}, {}, [], "heartbeat_stale"),
             ({"heartbeat_stale": True}, {}, [], "heartbeat_stale"),
-            ({"market_time_ms": now - 60_001}, {"source": "binance"}, [], "market_data_stale"),
+            ({"market_time_ms": now - 60_001, "price_event_ms": now - 60_001,
+              "quote_received_ms": now}, {"source": "binance"}, [], "market_data_stale"),
             ({"price": None, "heartbeat_ms": None}, {}, [], "market_not_observed"),
             ({"worker_error": "private worker error"}, {}, [], "worker_error"),
             ({"error": "private pipeline error"}, {}, [], "pipeline_error"),
@@ -209,6 +212,7 @@ class TestControlServer(unittest.TestCase):
                 snapshot["status"].update(desired_running=True, state="running")
                 snapshot["config"]["source"] = "binance"
                 snapshot["status"]["market_time_ms"] = now
+                snapshot["status"].update(price_event_ms=now, quote_received_ms=now)
                 snapshot["news"] = [{"id": "news-id", "assets": assets,
                                      "published_at_ms": published, "observed_at_ms": observed,
                                      "body": "private article body"}]
@@ -237,10 +241,11 @@ class TestControlServer(unittest.TestCase):
         runtime, snapshot = self.ready_runtime(now)
         runtime.poll_seconds = 30
         snapshot["config"]["source"] = "binance"
-        snapshot["status"].update(heartbeat_ms=now - 90_000, market_time_ms=now - 90_000)
+        snapshot["status"].update(heartbeat_ms=now - 90_000, market_time_ms=now,
+                                  price_event_ms=now, quote_received_ms=now)
         with mock.patch("tradingbot.server.time.time", return_value=now / 1000), TestClient(self.app(runtime)) as client:
             self.assertEqual(client.get("/readyz").status_code, 200)
-            snapshot["status"]["market_time_ms"] = now - 120_001
+            snapshot["status"]["heartbeat_ms"] = now - 120_001
             self.assertEqual(client.get("/readyz").status_code, 503)
 
     def test_http_pause_does_not_wait_for_market_io_and_fences_the_blocked_cycle(self):
@@ -268,7 +273,7 @@ class TestControlServer(unittest.TestCase):
                 runtime.control("start")
                 with TestClient(self.app(runtime)) as client, \
                         mock.patch("tradingbot.automation.MarketData.get_candles", side_effect=blocked_candles), \
-                        mock.patch("tradingbot.automation.MarketData.get_price", return_value=100):
+                        mock.patch("tradingbot.automation.MarketData.get_quote", return_value=MarketQuote(100, now_ms, now_ms)):
                     self.assertEqual(self.login(client).status_code, 200)
                     with ThreadPoolExecutor(max_workers=2) as workers:
                         cycle = workers.submit(runtime.tick_once, now_ms=now_ms)
